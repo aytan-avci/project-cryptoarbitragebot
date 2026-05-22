@@ -87,7 +87,7 @@ export function Overview({ events, loading, error }: OverviewProps) {
           </Typography>
           <Typography variant="body2" color="text.secondary">
             Run <code>python -m arbitrage_agent</code> from the project root.
-            The dashboard polls <code>logs/decisions.jsonl</code> every 2 s and
+            The dashboard polls <code>logs/decisions.jsonl</code> every 500 ms and
             will refresh as soon as the file appears.
           </Typography>
         </CardContent>
