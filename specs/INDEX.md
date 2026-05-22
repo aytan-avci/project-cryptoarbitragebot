@@ -16,6 +16,7 @@
 | [`README.md`](../README.md) | Human-facing overview, repo structure, getting-started. |
 | [`STATUS.md`](../STATUS.md) | Current session state. Bridge across `/compact` and new sessions. |
 | [`MEMORY.md`](../MEMORY.md) | Long-term project memory. Decisions, gotchas, operator preferences. |
+| [`USAGE.md`](../USAGE.md) | Bilingual (TR + EN) user manual — install, configure, run, dashboard, metrics, audit verify, testnet setup, mainnet runbook, troubleshooting, security notes. |
 
 ## specs/ (design & process)
 
