@@ -272,6 +272,72 @@ artefacts.
 - `SECURITY.md § 7 Change Log` — incident row + S1 strengthening row.
 - 224/224 pytest passing (218 + 6 lint tests).
 
+## [2026-05-23] setup | (C) dashboard enrichment — hedger events + S7 panel (336 tests PASS)
+**Goal**: surface two pieces of operational state the dashboard
+previously couldn't see — (a) what the real hedger (Faz 7g-c) did
+when a leg failed, (b) where the bot stands on its S7 30-day
+testnet probation (Faz 7g-d).
+**Backend**:
+- `DecisionLog.append_hedger_result(HedgeResult)` (new method,
+  `persistence/decision_log.py`): emits `event="hedger_result"` JSONL
+  with status, counter_leg dict (exchange/symbol/side/quantity/
+  limit_price), remaining_exposure, reason, fills_count. Hedge `Fill`s
+  are still appended via the existing `append_fill` path; this new
+  entry carries the surrounding decision context.
+- `orchestration/pipeline._handle_hedge` calls
+  `log_file.append_hedger_result(hedge_result)` immediately after the
+  hedge fills are processed. Both REST-poll and WS modes inherit the
+  change because they share `_handle_hedge`.
+- Tests: `test_decision_log.py` gains 2 cases — full hedger_result
+  entry serialisation + `counter_leg=None` (no_imbalance / no_market_
+  data paths) → JSON null.
+**Frontend** (`dashboard/`):
+- `types.ts`: `HedgeStatus` literal + `HedgerResultEvent` interface
+  added to the `LogEvent` union; `TestnetEvidence` interface mirrors
+  `risk/testnet_evidence.py` JSON schema.
+- `dataModel.ts`: `useTestnetEvidence(intervalMs=5_000)` hook polls
+  `/logs/testnet_evidence.json` (Vite middleware already serves
+  `/logs/*`, no config change needed). `hedgerResults` filter +
+  `HedgerSummary` extension of `DashboardSummary`. `summarize`
+  filters `no_imbalance` outcomes (happy path) and counts by status.
+  `summarizeTestnetEvidence(ev)` → `S7Summary` with
+  `daysObserved/required/eligible/hasEvidence/firstSeenUtc/
+  lastSeenUtc/venues`.
+- `components/HedgeActivity.tsx` (new): table of last 25 active
+  hedger_result events (filters out `no_imbalance`). Status chip
+  colored by outcome (filled=green, partial=orange, aborted/failed=
+  red, no_market_data=cancelled-gray). Counter-leg sub-table with
+  venue + side chip + symbol + qty + limit price + remaining
+  exposure (red when non-zero) + reason.
+- `components/SecurityStatus.tsx` (new): S7 probation card —
+  LinearProgress (daysObserved / 30), eligibility chip (eligible /
+  probationary / no evidence), first_seen / last_seen / venues
+  list. Empty-state copy explains gate semantics.
+- `App.tsx` mounts HedgeActivity + SecurityStatus inside the Shell
+  alongside the existing Overview. `useTestnetEvidence` instance
+  passed into SecurityStatus.
+**Build + smoke**:
+- `npm run build` clean: 386 KB JS / 52 KB CSS gzipped 122/21 KB.
+- Pipeline 3-iter run + injected one failed-sell-leg via
+  `_handle_hedge` → 20-line audit log (snapshot/opportunity/decision/
+  fill/hedger_result), `verify_audit_chain.py` verified clean.
+- Vite dev server (port 3006): all three endpoints respond 200 —
+  `/logs/decisions.jsonl` (20 lines), `/logs/testnet_evidence.json`
+  (12-day seeded), `/api/kill-switch` (engaged=false).
+**Test count**: 336 (was 334; +2 hedger_result audit entry tests).
+
+## [2026-05-22] setup | (E) initial GitHub push — private repo aytan-avci/project-cryptoarbitragebot
+`git init -b main` → first commit `200e75e` (131 files, 20040 lines)
+covering Faz 1 → 7g-d. Apache-2.0 LICENSE added. Pre-commit hooks
+(gitleaks + check_env_example) installed and ran green against all
+staged content (`scanned ~825 KB, no leaks found`). `.env` properly
+gitignored (verified via `git check-ignore`); the operator's real
+testnet credentials stayed local. Local repo uses global git
+identity (`Aytan Abdullah AVCI` + noreply email — privacy-preserving).
+GitHub repo created in browser (private, no auto-init) to bypass
+`gh auth login` device-flow friction; remote added + `git push -u
+origin main` succeeded.
+
 ## [2026-05-22] setup | Faz 7g-d — S7 testnet probation gate automated (334 tests PASS)
 **Goal**: replace operator policy + README copy for S7 with a hard
 startup gate that refuses mainnet+live until ≥30 days of testnet

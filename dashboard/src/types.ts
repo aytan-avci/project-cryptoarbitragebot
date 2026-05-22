@@ -60,15 +60,50 @@ export interface SnapshotFetchedEvent {
   timestamp_utc: string;
 }
 
+// Hedger outcome — emitted by `DecisionLog.append_hedger_result` once
+// per opportunity that needed neutralisation (Faz 7g-c + dashboard
+// enrichment).
+export type HedgeStatus =
+  | 'no_imbalance'
+  | 'filled'
+  | 'partial'
+  | 'aborted_slippage'
+  | 'no_market_data'
+  | 'placement_failed';
+
+export interface HedgerResultEvent {
+  event: 'hedger_result';
+  opportunity_id: string;
+  status: HedgeStatus;
+  remaining_exposure: string;
+  reason: string;
+  counter_leg: {
+    exchange: string;
+    symbol: string;
+    side: Side;
+    quantity: string;
+    limit_price: string;
+  } | null;
+  fills_count: number;
+}
+
 export type LogEvent =
   | OpportunityEvent
   | RiskDecisionEvent
   | FillEvent
-  | SnapshotFetchedEvent;
+  | SnapshotFetchedEvent
+  | HedgerResultEvent;
 
 export interface KillSwitchState {
   engaged: boolean;
   reason?: string;
   engaged_at_utc?: string;
   reset_at_utc?: string;
+}
+
+// S7 testnet evidence — mirrors `risk/testnet_evidence.py` schema.
+export interface TestnetEvidence {
+  first_seen_utc: string | null;
+  last_seen_utc: string | null;
+  venues: string[];
 }

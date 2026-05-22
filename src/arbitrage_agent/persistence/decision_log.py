@@ -26,7 +26,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from arbitrage_agent.domain import Fill, MarketSnapshot, Opportunity, RiskDecision
+from arbitrage_agent.domain import (
+    Fill,
+    HedgeResult,
+    MarketSnapshot,
+    Opportunity,
+    RiskDecision,
+)
 
 GENESIS_HASH = "0" * 64
 """Sentinel `_prev_hash` for the very first line of any chain."""
@@ -148,6 +154,29 @@ class DecisionLog:
             "bid_size": snapshot.bid_size,
             "ask_size": snapshot.ask_size,
             "timestamp_utc": snapshot.timestamp_utc,
+        })
+
+    def append_hedger_result(self, result: HedgeResult) -> None:
+        """Faz 7g-c+(C) — record the hedger's outcome as its own audit
+        event. Hedge `Fill`s are already emitted via `append_fill`; this
+        entry captures the surrounding decision (status / abort reason /
+        residual exposure) so operator + dashboard see WHY the hedger
+        acted, not just WHAT it filled."""
+        counter = result.counter_leg
+        self._append({
+            "event": "hedger_result",
+            "opportunity_id": result.opportunity_id,
+            "status": result.status,
+            "remaining_exposure": result.remaining_exposure,
+            "reason": result.reason,
+            "counter_leg": None if counter is None else {
+                "exchange": counter.exchange,
+                "symbol": str(counter.symbol),
+                "side": counter.side,
+                "quantity": counter.quantity,
+                "limit_price": counter.limit_price,
+            },
+            "fills_count": len(result.fills),
         })
 
 

@@ -331,6 +331,9 @@ async def _handle_hedge(
             price=str(fill.price), volume=str(fill.volume),
             fee_usd=str(fill.fee),
         )
+    # Audit-trail entry for the hedger decision itself — feeds the
+    # dashboard's Hedge Activity panel (Faz (C)).
+    log_file.append_hedger_result(hedge_result)
     _log.info(
         "hedger.result",
         opportunity_id=hedge_result.opportunity_id,

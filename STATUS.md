@@ -6,23 +6,40 @@
 
 ---
 
-**Faz 7g-d tamam — S7 mainnet probation gate otomatik.** SKILL.md S7
-artık programatik enforce ediliyor. `risk/testnet_evidence.py` yeni
-modül: `record(venue, now, path)` her başarılı Binance-testnet auth
-probe'unda `logs/testnet_evidence.json`'a stamp atar (first_seen +
-last_seen + venue set); `attest_mainnet_eligibility(now, min_days=30)`
-→ `(ok, message)` operatör-friendly. `BinanceAdapter._is_testnet()` +
-`_record_testnet_evidence()` `_ensure_no_withdraw_permission()`
-başarı yolunda çağırılıyor — mainnet probe HİÇ stamp atmaz (gate
-self-fulfilling olmasın). `Settings._confirm_mainnet_live` S4'ten
-sonra S7 check'i koşar: <30 testnet günü → ValidationError. Acil
-bypass `S7_OVERRIDE_TESTNET_PROBATION=true` (loud), CI için
-`S7_MIN_TESTNET_DAYS` env. Smoke: no-evidence → reddetti
-("S7: no testnet evidence at logs/testnet_evidence.json"); 31 günlük
-seed → kabul. **334/334 pytest yeşil** (önceki 315 + 11 evidence
-unit + 6 S7 config + 2 binance recorder). **Tüm 7g alt-fazları
-tamam (7g-a/b/c/d)** — finansal güvenlik + audit chain + real
-hedger + mainnet gate. Sıradaki kararlar operatörde.
+**(C) Dashboard zenginleştirme tamam.** Audit log schema'sı yeni
+`event="hedger_result"` ile genişledi (`DecisionLog.append_hedger_
+result(HedgeResult)`); pipeline `_handle_hedge` her hedge sonrası
+çağırır → operatör ne fill oldu (event="fill") değil, hedge'in
+NEDEN/NASIL çalıştığını da görür (status, counter_leg dict,
+remaining_exposure, reason). Dashboard tarafı: `types.ts`
+`HedgerResultEvent` + `TestnetEvidence` interface'leri; `dataModel.ts`
+`useTestnetEvidence` hook (5s polling) + `hedgerResults` filter +
+`summarizeTestnetEvidence` (days/30, eligible/probationary). Yeni iki
+component: `HedgeActivity.tsx` (no_imbalance'ı eler, sadece müdahale
+gerektirenleri tablo halinde) + `SecurityStatus.tsx` (probation
+LinearProgress + first/last seen + venue list + eligible chip). Vite
+middleware zaten `/logs/*` serve ediyordu, `testnet_evidence.json` ek
+config gerektirmedi. Smoke: `npm run build` temiz, 386 KB JS / 52 KB
+CSS; pipeline 3 iter + manual hedge inject → audit log 20 satır
+hash-chain intact, 1 hedger_result entry, 3 endpoint (decisions.jsonl,
+testnet_evidence.json, /api/kill-switch) HTTP 200. **336/336 pytest
+yeşil** (önceki 334 + 2 hedger_result event testi). Sıralı sonraki:
+(D) Performance + observability.
+
+## Last session ended at
+**2026-05-23** — (C) Dashboard zenginleştirme: `DecisionLog.append_
+hedger_result(HedgeResult)` yeni metod; pipeline `_handle_hedge` her
+hedge sonrası çağırır → audit log'a `event="hedger_result"` (status,
+counter_leg dict, remaining_exposure, reason). Dashboard TS tarafı:
+`HedgerResultEvent` + `TestnetEvidence` types, `useTestnetEvidence`
+hook (5s), `hedgerResults` filter + `summarizeTestnetEvidence`
+(days/30, eligibility). Yeni iki component: `HedgeActivity.tsx`
+(no_imbalance'ı eler, müdahale gerektiren olayları tablo halinde),
+`SecurityStatus.tsx` (LinearProgress + eligibility chip + first/last
+seen + venue list). App.tsx mount. Vite middleware zaten `/logs/*`
+serve ediyor — extra config yok. `npm run build` temiz, 336/336
+pytest yeşil. Smoke: pipeline 3-iter + manual hedge injection, 20
+satır audit log hash-chain intact, 3 endpoint HTTP 200.
 
 ## Last session ended at
 **2026-05-22** — Faz 7g-d: `risk/testnet_evidence.py` (yeni modül)

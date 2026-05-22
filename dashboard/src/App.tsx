@@ -2,8 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { CssBaseline, ThemeProvider } from '@mui/material';
 
 import { KillSwitchBanner, Shell, TopBar } from './components/Layout';
+import { HedgeActivity } from './components/HedgeActivity';
 import { Overview } from './components/Overview';
-import { useAuditLog, useKillSwitch } from './dataModel';
+import { SecurityStatus } from './components/SecurityStatus';
+import { useAuditLog, useKillSwitch, useTestnetEvidence } from './dataModel';
 import { darkTheme, lightTheme } from './theme';
 
 type Mode = 'light' | 'dark';
@@ -22,6 +24,7 @@ export default function App() {
   const theme = useMemo(() => (mode === 'dark' ? darkTheme : lightTheme), [mode]);
   const { events, loading, error } = useAuditLog(500);
   const killSwitch = useKillSwitch(2_000);
+  const testnetEvidence = useTestnetEvidence(5_000);
 
   useEffect(() => {
     try {
@@ -48,6 +51,8 @@ export default function App() {
       >
         <KillSwitchBanner killSwitch={killSwitch} />
         <Overview events={events} loading={loading} error={error} />
+        <HedgeActivity events={events} />
+        <SecurityStatus evidence={testnetEvidence} />
       </Shell>
     </ThemeProvider>
   );

@@ -35,3 +35,4 @@ logs/
 dashboard/node_modules/
 dashboard/dist/
 dashboard/public/logs
+dashboard/tsconfig.tsbuildinfo

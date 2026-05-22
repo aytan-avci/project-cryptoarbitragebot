@@ -227,3 +227,51 @@ def test_verify_chain_handles_missing_file(tmp_path: Path):
     assert ok is False
     assert "not found" in message
     assert lines == 0
+
+
+# ---- Dashboard enrichment (C): hedger_result event ------------------------
+
+
+def test_append_hedger_result_writes_status_and_exposure(tmp_path: Path):
+    from arbitrage_agent.domain import HedgeResult, OrderIntent, Symbol, ExchangeId
+
+    p = tmp_path / "decisions.jsonl"
+    log = DecisionLog(p)
+    counter = OrderIntent(
+        exchange=ExchangeId("bybit"), symbol=Symbol("BTC", "USDT"),
+        side="sell", quantity=volume("0.001"), limit_price=price("60800"),
+    )
+    result = HedgeResult(
+        opportunity_id=new_opportunity_id(),
+        status="filled",
+        counter_leg=counter,
+        fills=(),
+        remaining_exposure=Decimal("0"),
+        reason="placed sell 0.001 BTC/USDT @ 60800 on bybit",
+    )
+    log.append_hedger_result(result)
+    entry = json.loads(p.read_text().splitlines()[0])
+    assert entry["event"] == "hedger_result"
+    assert entry["status"] == "filled"
+    assert entry["counter_leg"]["exchange"] == "bybit"
+    assert entry["counter_leg"]["side"] == "sell"
+    assert entry["remaining_exposure"] == "0"
+
+
+def test_append_hedger_result_serialises_none_counter_leg(tmp_path: Path):
+    """`no_imbalance` / `no_market_data` paths return counter_leg=None;
+    must serialise to JSON null, not crash."""
+    from arbitrage_agent.domain import HedgeResult
+
+    p = tmp_path / "decisions.jsonl"
+    log = DecisionLog(p)
+    result = HedgeResult(
+        opportunity_id=new_opportunity_id(),
+        status="no_imbalance",
+        counter_leg=None,
+        reason="all legs net to zero",
+    )
+    log.append_hedger_result(result)
+    entry = json.loads(p.read_text().splitlines()[0])
+    assert entry["status"] == "no_imbalance"
+    assert entry["counter_leg"] is None
