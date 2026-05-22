@@ -1,0 +1,232 @@
+"""Integration tests — pipeline.run() end-to-end paper chain."""
+
+import asyncio
+import json
+import os
+from decimal import Decimal
+from pathlib import Path
+
+import pytest
+
+from arbitrage_agent.config import Settings
+from arbitrage_agent.domain import (
+    ExchangeId,
+    MarketSnapshot,
+    Symbol,
+    now_utc,
+    price,
+    volume,
+)
+from arbitrage_agent.orchestration import pipeline
+
+
+def _clean_env(monkeypatch):
+    for k in list(os.environ):
+        if k.startswith(
+            ("RISK_", "EXECUTION_", "LOG_", "BINANCE_", "BYBIT_",
+             "SPATIAL_", "PIPELINE_")
+        ):
+            monkeypatch.delenv(k, raising=False)
+
+
+def _wide_spread_seeds() -> dict[ExchangeId, MarketSnapshot]:
+    """Default-config seeds: produces an Opportunity that the gate approves."""
+    btc = Symbol("BTC", "USDT")
+    return {
+        ExchangeId("binance"): MarketSnapshot(
+            exchange=ExchangeId("binance"), symbol=btc,
+            bid=price("60000"), ask=price("60001"),
+            bid_size=volume("10"), ask_size=volume("10"),
+            timestamp_utc=now_utc(),
+        ),
+        ExchangeId("bybit"): MarketSnapshot(
+            exchange=ExchangeId("bybit"), symbol=btc,
+            bid=price("60800"), ask=price("60801"),
+            bid_size=volume("10"), ask_size=volume("10"),
+            timestamp_utc=now_utc(),
+        ),
+    }
+
+
+def _tight_spread_seeds() -> dict[ExchangeId, MarketSnapshot]:
+    """Spread small enough that fees + slippage eat it; strategy → None."""
+    btc = Symbol("BTC", "USDT")
+    return {
+        ExchangeId("binance"): MarketSnapshot(
+            exchange=ExchangeId("binance"), symbol=btc,
+            bid=price("60000"), ask=price("60001"),
+            bid_size=volume("10"), ask_size=volume("10"),
+            timestamp_utc=now_utc(),
+        ),
+        ExchangeId("bybit"): MarketSnapshot(
+            exchange=ExchangeId("bybit"), symbol=btc,
+            bid=price("60005"), ask=price("60006"),
+            bid_size=volume("10"), ask_size=volume("10"),
+            timestamp_utc=now_utc(),
+        ),
+    }
+
+
+def test_pipeline_full_chain_writes_log(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    _clean_env(monkeypatch)
+    s = Settings()  # all defaults; log path under tmp cwd
+    summary = asyncio.run(
+        pipeline.run(s, snapshot_seeds=_wide_spread_seeds())
+    )
+    assert summary["iterations"] == 1
+    assert summary["snapshots"] == 2  # one per adapter (Faz 7a)
+    assert summary["opportunities"] == 1
+    assert summary["approved"] == 1
+    assert summary["rejected"] == 0
+    assert summary["fills"] == 2
+
+    log_path = tmp_path / "logs" / "decisions.jsonl"
+    assert log_path.exists()
+    events = [json.loads(line)["event"] for line in log_path.read_text().splitlines()]
+    # 2 snapshots + 1 opp + 1 decision + 2 fills = 6 lines, in that order
+    assert events == [
+        "snapshot_fetched",
+        "snapshot_fetched",
+        "opportunity_detected",
+        "risk_decision",
+        "fill",
+        "fill",
+    ]
+
+
+def test_pipeline_no_opportunity_when_spread_too_tight(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    _clean_env(monkeypatch)
+    s = Settings()
+    summary = asyncio.run(
+        pipeline.run(s, snapshot_seeds=_tight_spread_seeds())
+    )
+    assert summary["snapshots"] == 2  # snapshots are always written (Faz 7a)
+    assert summary["opportunities"] == 0
+    assert summary["approved"] == 0
+    assert summary["fills"] == 0
+    # Snapshot rows are written even with no opportunity detected.
+    log_path = tmp_path / "logs" / "decisions.jsonl"
+    assert log_path.exists()
+    events = [json.loads(line)["event"] for line in log_path.read_text().splitlines()]
+    assert events == ["snapshot_fetched", "snapshot_fetched"]
+
+
+def test_pipeline_multiple_iterations(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("PIPELINE_ITERATIONS", "3")
+    s = Settings()
+    summary = asyncio.run(
+        pipeline.run(s, snapshot_seeds=_wide_spread_seeds())
+    )
+    # Static seeds re-fired each iteration → 3 opportunities, all approved
+    assert summary["iterations"] == 3
+    assert summary["opportunities"] == 3
+    assert summary["approved"] == 3
+    # Each iteration produces 2 fills (one per adapter); but `fetch_fills(
+    # since=opp.detected_at)` may also re-emit accumulated fills depending
+    # on wall-clock ordering (PaperExchange uses real time for fill
+    # timestamps while the strategy clock is millisecond-resolution).
+    # This double-counting is a known Faz 6 limitation; Faz 7 ingestion
+    # replaces "fetch fills since" polling with subscription-based delivery.
+    # Loose bounds: at least each iter's own 2 fills, at most cumulative.
+    assert 6 <= summary["fills"] <= 12
+
+
+def test_pipeline_rejects_single_seeded_exchange(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    _clean_env(monkeypatch)
+    s = Settings()
+    only_one = {ExchangeId("binance"): _wide_spread_seeds()[ExchangeId("binance")]}
+    with pytest.raises(ValueError, match="at least two seeded exchanges"):
+        asyncio.run(pipeline.run(s, snapshot_seeds=only_one))
+
+
+def test_pipeline_hedge_fills_flow_through_audit_log_and_tracker(
+    monkeypatch, tmp_path: Path,
+):
+    """Faz 7g-c — when execute() returns an imbalanced ExecutionResult,
+    `_handle_hedge` must:
+      1) call the real hedger,
+      2) thread each hedge fill through DecisionLog + tracker,
+      3) bump `counters["fills"]`.
+    We drive `_handle_hedge` directly with a crafted ExecutionResult
+    that has a buy fill on Binance and a failed sell on Bybit.
+    """
+    from arbitrage_agent.domain import (
+        ExecutionResult, Fill, LegResult, OrderId, OrderIntent,
+        new_opportunity_id, Opportunity,
+    )
+    from arbitrage_agent.exchanges.paper import PaperExchange
+    from arbitrage_agent.ingestion.bus import LatestSnapshotView
+    from arbitrage_agent.orchestration.account_state_tracker import AccountStateTracker
+    from arbitrage_agent.orchestration.pipeline import _handle_hedge
+    from arbitrage_agent.persistence.decision_log import DecisionLog
+
+    monkeypatch.chdir(tmp_path)
+    _clean_env(monkeypatch)
+    s = Settings()  # default hedge_max_slippage_bps = 50
+
+    btc = Symbol("BTC", "USDT")
+    binance, bybit = ExchangeId("binance"), ExchangeId("bybit")
+    seeds = _wide_spread_seeds()
+
+    adapters = {
+        binance: PaperExchange(name="binance", prices={btc: seeds[binance]}),
+        bybit: PaperExchange(name="bybit", prices={btc: seeds[bybit]}),
+    }
+    view = LatestSnapshotView()
+    view.update(seeds[binance])
+    view.update(seeds[bybit])
+
+    buy_leg = OrderIntent(exchange=binance, symbol=btc, side="buy",
+                          quantity=volume("0.001"), limit_price=price("60001"))
+    sell_leg = OrderIntent(exchange=bybit, symbol=btc, side="sell",
+                           quantity=volume("0.001"), limit_price=price("60800"))
+    opp_id = new_opportunity_id()
+    opp = Opportunity(
+        id=opp_id, detected_at=now_utc(), strategy="spatial",
+        legs=(buy_leg, sell_leg),
+        expected_net_profit=Decimal("0.5"), confidence=0.9, valid_for_ms=1000,
+    )
+    buy_fill = Fill(
+        opportunity_id=opp_id, exchange=binance, symbol=btc, side="buy",
+        price=price("60001"), volume=volume("0.001"), fee=price("0"),
+        timestamp_utc=now_utc(),
+    )
+    result = ExecutionResult(
+        opportunity_id=opp_id,
+        legs=(
+            LegResult(leg=buy_leg, order_id=OrderId("ord-binance"),
+                      state="filled", fills=(buy_fill,)),
+            LegResult(leg=sell_leg, order_id=None, state="failed", fills=()),
+        ),
+    )
+
+    log_path = tmp_path / "decisions.jsonl"
+    log_file = DecisionLog(log_path)
+    tracker = AccountStateTracker()
+    tracker.on_fill(buy_fill)  # baseline state matches the result
+    counters = {"iterations": 0, "snapshots": 0, "opportunities": 0,
+                "approved": 0, "rejected": 0, "fills": 0}
+
+    asyncio.run(_handle_hedge(opp, result, adapters, view, s,
+                              log_file, tracker, counters))
+
+    # 1) counter-leg fill landed in the audit log.
+    audit_lines = [json.loads(line) for line in log_path.read_text().splitlines()]
+    fill_events = [e for e in audit_lines if e["event"] == "fill"]
+    assert len(fill_events) == 1
+    assert fill_events[0]["side"] == "sell"
+    assert fill_events[0]["exchange"] == "bybit"
+
+    # 2) tracker reflects the hedged net (buy +0.001 then sell -0.001 = 0).
+    snap = tracker.snapshot(now_ms=0)
+    bybit_pos = snap.open_position_qty.get((bybit, btc), Decimal("0"))
+    binance_pos = snap.open_position_qty.get((binance, btc), Decimal("0"))
+    assert binance_pos + bybit_pos == Decimal("0")
+
+    # 3) counters bumped by hedge fill count.
+    assert counters["fills"] == 1

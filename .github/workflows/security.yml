@@ -1,0 +1,29 @@
+# Security CI workflow (SECURITY.md S1).
+# Activates when this repo is pushed to a GitHub remote. Until then,
+# the pre-commit hook is the only enforcement; once the repo is on
+# GitHub, every PR + push is scanned again here.
+
+name: security
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  gitleaks:
+    name: gitleaks secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so gitleaks can scan commits, not just the tip.
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config-path: .gitleaks.toml

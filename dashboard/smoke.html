@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arbitrage Agent — Operator Dashboard (design smoke)</title>
+  <!--
+    MOCK DATA. Replace with /api/decisions in step 2.
+    Color tokens and component decisions follow specs/DESIGN_LANGUAGE.md
+    §§ 3, 4, 5, 6, 7 exactly. Real build will use React + MUI v6 (§ 2);
+    this smoke is plain HTML+CSS for instant browser-open review.
+  -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    /* ───────────────────────────────────────────────────────────
+       THEME TOKENS  —  specs/DESIGN_LANGUAGE.md § 3 + § 4
+       ─────────────────────────────────────────────────────────── */
+    :root[data-theme="dark"] {
+      --primary: #64B5F6;
+      --secondary: #90A4AE;
+      --error: #EF5350;
+      --warning: #FFB74D;
+      --info: #4FC3F7;
+      --success: #66BB6A;
+      --bg-default: #121212;
+      --bg-paper: #1E1E1E;
+      --bg-paper-hover: #262626;
+      --text-primary: #E8EAED;
+      --text-secondary: #9AA0A6;
+      --divider: #2C2C2C;
+
+      --pnl-positive: #81C784;
+      --pnl-negative: #E57373;
+      --pnl-flat: #9AA0A6;
+
+      --latency-healthy: #66BB6A;
+      --latency-warning: #FFB74D;
+      --latency-critical: #EF5350;
+
+      --conn-connected: #66BB6A;
+      --conn-reconnecting: #FFB74D;
+      --conn-disconnected: #EF5350;
+      --conn-quarantined: #90A4AE;
+
+      --order-pending: #9AA0A6;
+      --order-submitted: #4FC3F7;
+      --order-partial: #FFB74D;
+      --order-filled: #81C784;
+      --order-cancelled: #90A4AE;
+      --order-rejected: #EF5350;
+      --order-failed: #F06292;
+
+      --kill-engaged: #B71C1C;
+    }
+
+    :root[data-theme="light"] {
+      --primary: #1565C0;
+      --secondary: #455A64;
+      --error: #C62828;
+      --warning: #EF6C00;
+      --info: #0277BD;
+      --success: #2E7D32;
+      --bg-default: #FAFAFA;
+      --bg-paper: #FFFFFF;
+      --bg-paper-hover: #F5F5F5;
+      --text-primary: #1A1A1A;
+      --text-secondary: #5F6368;
+      --divider: #E0E0E0;
+
+      --pnl-positive: #1B5E20;
+      --pnl-negative: #B71C1C;
+      --pnl-flat: #5F6368;
+
+      --latency-healthy: #2E7D32;
+      --latency-warning: #EF6C00;
+      --latency-critical: #C62828;
+
+      --conn-connected: #2E7D32;
+      --conn-reconnecting: #EF6C00;
+      --conn-disconnected: #C62828;
+      --conn-quarantined: #455A64;
+
+      --order-pending: #5F6368;
+      --order-submitted: #0277BD;
+      --order-partial: #EF6C00;
+      --order-filled: #1B5E20;
+      --order-cancelled: #455A64;
+      --order-rejected: #C62828;
+      --order-failed: #880E4F;
+
+      --kill-engaged: #C62828;
+    }
+
+    /* ───────────────────────────────────────────────────────────
+       BASE
+       ─────────────────────────────────────────────────────────── */
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Roboto', sans-serif;
+      background: var(--bg-default);
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.5;
+      transition: background-color 150ms ease;
+    }
+    .mono {
+      font-family: 'Roboto Mono', monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ───────────────────────────────────────────────────────────
+       APP LAYOUT  —  § 6 canonical
+       ─────────────────────────────────────────────────────────── */
+    .layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      grid-template-rows: 64px 1fr;
+      min-height: 100vh;
+    }
+    .appbar {
+      grid-column: 1 / -1;
+      background: var(--bg-paper);
+      border-bottom: 1px solid var(--divider);
+      display: flex;
+      align-items: center;
+      padding: 0 24px;
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      transition: background-color 200ms ease-out;
+    }
+    body.kill-engaged .appbar {
+      background: var(--kill-engaged);
+      color: #FFFFFF;
+      border-bottom-color: #000;
+    }
+    .appbar-title {
+      font-size: 16px;
+      font-weight: 500;
+      letter-spacing: 0.15px;
+    }
+    .appbar-spacer { flex: 1; }
+
+    .leftrail {
+      background: var(--bg-paper);
+      border-right: 1px solid var(--divider);
+      padding: 16px 0;
+      transition: background-color 150ms ease;
+    }
+    .nav-item {
+      padding: 10px 24px;
+      cursor: pointer;
+      font-size: 14px;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-left: 3px solid transparent;
+    }
+    .nav-item.active {
+      color: var(--text-primary);
+      background: var(--bg-paper-hover);
+      border-left-color: var(--primary);
+    }
+    .nav-item:hover:not(.active) { background: var(--bg-paper-hover); }
+    .nav-icon {
+      width: 18px; height: 18px;
+      opacity: 0.85;
+    }
+
+    .main {
+      padding: 24px;
+      overflow-x: hidden;
+    }
+
+    /* ───────────────────────────────────────────────────────────
+       CARDS, CHIPS, TABLES
+       ─────────────────────────────────────────────────────────── */
+    .card {
+      background: var(--bg-paper);
+      border: 1px solid var(--divider);
+      border-radius: 4px;
+      padding: 16px;
+      transition: background-color 150ms ease;
+    }
+    .card-header {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .card-value {
+      font-family: 'Roboto Mono', monospace;
+      font-size: 24px;
+      font-weight: 500;
+      letter-spacing: -0.5px;
+    }
+    .card-meta { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .pnl-positive { color: var(--pnl-positive); }
+    .pnl-negative { color: var(--pnl-negative); }
+    .pnl-flat     { color: var(--pnl-flat); }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 10px;
+      border-radius: 16px;
+      font-size: 12px;
+      font-weight: 500;
+      height: 22px;
+      border: 1px solid currentColor;
+      background: transparent;
+    }
+    .chip-filled { background: currentColor; border: none; }
+    .chip-filled > * { color: var(--bg-paper); }
+    .chip-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    .chip-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+    .chip.latency-healthy  { color: var(--latency-healthy); }
+    .chip.latency-warning  { color: var(--latency-warning); }
+    .chip.latency-critical { color: var(--latency-critical); animation: pulse 300ms ease-out; }
+    .chip.conn-connected     { color: var(--conn-connected); }
+    .chip.conn-reconnecting  { color: var(--conn-reconnecting); }
+    .chip.conn-disconnected  { color: var(--conn-disconnected); }
+    .chip.conn-quarantined   { color: var(--conn-quarantined); }
+
+    .chip.order-pending   { color: var(--order-pending); }
+    .chip.order-submitted { color: var(--order-submitted); }
+    .chip.order-partial   { color: var(--order-partial); }
+    .chip.order-filled    { color: var(--order-filled); }
+    .chip.order-cancelled { color: var(--order-cancelled); }
+    .chip.order-rejected  { color: var(--order-rejected); }
+    .chip.order-failed    { color: var(--order-failed); }
+
+    @keyframes pulse {
+      0%   { transform: scale(1); }
+      50%  { transform: scale(1.06); }
+      100% { transform: scale(1); }
+    }
+
+    /* Section heading */
+    .section { margin-bottom: 24px; }
+    .section-title {
+      font-size: 14px;
+      font-weight: 500;
+      margin: 0 0 12px;
+      color: var(--text-primary);
+    }
+    .section-sub {
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-weight: 400;
+      margin-left: 8px;
+    }
+
+    /* Table */
+    .tbl {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--bg-paper);
+      border: 1px solid var(--divider);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .tbl thead th {
+      background: var(--bg-paper-hover);
+      color: var(--text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 8px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--divider);
+    }
+    .tbl tbody td {
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--divider);
+      font-size: 13px;
+    }
+    .tbl tbody tr:last-child td { border-bottom: 0; }
+    .tbl tbody tr:hover { background: var(--bg-paper-hover); }
+    .num { text-align: right; }
+
+    /* Theme toggle button */
+    .btn {
+      background: transparent;
+      color: inherit;
+      border: 1px solid var(--divider);
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn:hover { background: var(--bg-paper-hover); }
+    body.kill-engaged .btn { border-color: rgba(255,255,255,0.4); }
+    body.kill-engaged .btn:hover { background: rgba(255,255,255,0.1); }
+
+    /* Kill-switch banner (§ 4.5) */
+    .alert {
+      padding: 12px 16px;
+      border-radius: 4px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 14px;
+    }
+    .alert-error {
+      background: var(--kill-engaged);
+      color: #FFFFFF;
+      font-weight: 500;
+    }
+    .alert-error .alert-icon::before { content: "⛔"; font-size: 18px; }
+
+    /* Empty state (§ 9) */
+    .empty {
+      padding: 32px;
+      text-align: center;
+      color: var(--text-secondary);
+      font-size: 13px;
+      border: 1px dashed var(--divider);
+      border-radius: 4px;
+      background: var(--bg-paper);
+    }
+    .empty-icon { font-size: 24px; margin-bottom: 8px; opacity: 0.6; }
+
+    .stale-chip {
+      background: var(--latency-warning);
+      color: var(--bg-default);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      font-family: 'Roboto Mono', monospace;
+    }
+
+    /* Side glyph for P&L (§ 4.1) */
+    .glyph { font-size: 18px; vertical-align: -2px; margin-right: 2px; }
+
+    /* Layout helpers */
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .col { flex: 1 1 0; min-width: 280px; }
+    .grow { flex: 1; }
+    .small { font-size: 12px; color: var(--text-secondary); }
+    .nowrap { white-space: nowrap; }
+  </style>
+</head>
+<body class="">
+  <div class="layout">
+
+    <!-- ───── APP BAR  (§ 4.5 kill-switch behaviour built in) ───── -->
+    <header class="appbar">
+      <span class="appbar-title">Arbitrage Agent</span>
+      <span class="small">paper · v0.0.1</span>
+      <span class="appbar-spacer"></span>
+      <span id="killswitch-chip" class="chip chip-filled" style="color: var(--success);">
+        <span class="chip-dot"></span>
+        <span style="color: inherit;">Kill-switch: OFF</span>
+      </span>
+      <button id="killswitch-btn" class="btn" onclick="toggleKill()">Engage kill-switch</button>
+      <button class="btn" onclick="toggleTheme()">
+        <span id="theme-icon">☾</span>
+        <span id="theme-label">Dark</span>
+      </button>
+    </header>
+
+    <!-- ───── LEFT RAIL  (§ 6) ───── -->
+    <aside class="leftrail">
+      <div class="nav-item active">
+        <span class="nav-icon">◧</span> Overview
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">⇅</span> Opportunities
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">✓</span> Risk Decisions
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">$</span> Fills
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">⛁</span> Audit Log
+      </div>
+      <div class="nav-item">
+        <span class="nav-icon">⚙</span> Settings
+      </div>
+    </aside>
+
+    <!-- ───── MAIN ───── -->
+    <main class="main">
+
+      <!-- Kill-switch persistent banner (§ 4.5) — hidden unless engaged -->
+      <div id="kill-banner" class="alert alert-error" style="display:none;">
+        <span class="alert-icon"></span>
+        <div>
+          <strong>KILL-SWITCH ENGAGED.</strong>
+          <span class="small" style="color: rgba(255,255,255,0.8);">
+            No new orders will be submitted. Pending orders cancelled. Operator action required to reset.
+          </span>
+        </div>
+      </div>
+
+      <!-- KPI tiles (§ 7 Card) -->
+      <div class="kpi-row">
+        <div class="card">
+          <div class="card-header">P&L Today</div>
+          <div class="card-value pnl-positive">
+            <span class="glyph">▲</span>+$2.45
+          </div>
+          <div class="card-meta">7 opps · 5 approved · 14 fills</div>
+        </div>
+        <div class="card">
+          <div class="card-header">Opportunities Detected</div>
+          <div class="card-value mono">7</div>
+          <div class="card-meta">last 1 hour</div>
+        </div>
+        <div class="card">
+          <div class="card-header">Approval Rate</div>
+          <div class="card-value mono">71%</div>
+          <div class="card-meta">5 approved / 7 detected</div>
+        </div>
+        <div class="card">
+          <div class="card-header">Active Adapters</div>
+          <div class="card-value mono">2 / 4</div>
+          <div class="card-meta">2 connected · 1 reconnecting · 1 quarantined</div>
+        </div>
+      </div>
+
+      <!-- Latency tier demo (§ 4.2) -->
+      <section class="section">
+        <h3 class="section-title">Venue Latency
+          <span class="section-sub">healthy &lt;50ms · warning 50–100ms · critical &gt;100ms</span>
+        </h3>
+        <div class="chip-row">
+          <span class="chip latency-healthy">
+            <span class="chip-dot"></span>
+            binance <span class="mono">23ms</span>
+          </span>
+          <span class="chip latency-warning">
+            <span class="chip-dot"></span>
+            bybit <span class="mono">87ms</span>
+          </span>
+          <span class="chip latency-critical">
+            <span class="chip-dot"></span>
+            kraken <span class="mono">142ms</span>
+          </span>
+        </div>
+      </section>
+
+      <!-- Connection state demo (§ 4.3) -->
+      <section class="section">
+        <h3 class="section-title">WebSocket Connections
+          <span class="section-sub">quarantined = intentionally excluded by risk layer (not a failure)</span>
+        </h3>
+        <div class="chip-row">
+          <span class="chip conn-connected"><span class="chip-dot"></span>binance · connected</span>
+          <span class="chip conn-connected"><span class="chip-dot"></span>bybit · connected</span>
+          <span class="chip conn-reconnecting"><span class="chip-dot"></span>kraken · reconnecting</span>
+          <span class="chip conn-quarantined"><span class="chip-dot"></span>coinbase · quarantined</span>
+        </div>
+      </section>
+
+      <!-- Recent opportunities -->
+      <section class="section">
+        <h3 class="section-title">Recent Opportunities
+          <span class="stale-chip">12s ago</span>
+        </h3>
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Time UTC</th>
+              <th>Strategy</th>
+              <th>Symbol</th>
+              <th class="num">Legs</th>
+              <th class="num">Expected Net (USD)</th>
+              <th class="num">Confidence</th>
+              <th>Decision</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="mono">08:34:38</td>
+              <td>spatial</td>
+              <td>BTC/USDT</td>
+              <td class="num mono">2</td>
+              <td class="num mono pnl-positive"><span class="glyph">▲</span>+$0.66</td>
+              <td class="num mono">0.90</td>
+              <td><span class="chip order-filled"><span class="chip-dot"></span>approved · all checks passed</span></td>
+            </tr>
+            <tr>
+              <td class="mono">08:34:31</td>
+              <td>spatial</td>
+              <td>ETH/USDT</td>
+              <td class="num mono">2</td>
+              <td class="num mono pnl-positive"><span class="glyph">▲</span>+$1.23</td>
+              <td class="num mono">0.92</td>
+              <td><span class="chip order-filled"><span class="chip-dot"></span>approved</span></td>
+            </tr>
+            <tr>
+              <td class="mono">08:34:22</td>
+              <td>triangular</td>
+              <td>USDT→BTC→ETH</td>
+              <td class="num mono">3</td>
+              <td class="num mono pnl-positive"><span class="glyph">▲</span>+$0.89</td>
+              <td class="num mono">0.85</td>
+              <td><span class="chip order-filled"><span class="chip-dot"></span>approved</span></td>
+            </tr>
+            <tr>
+              <td class="mono">08:34:18</td>
+              <td>spatial</td>
+              <td>BTC/USDT</td>
+              <td class="num mono">2</td>
+              <td class="num mono pnl-positive"><span class="glyph">▲</span>+$0.41</td>
+              <td class="num mono">0.87</td>
+              <td><span class="chip order-rejected"><span class="chip-dot"></span>rejected · profit_below_threshold</span></td>
+            </tr>
+            <tr>
+              <td class="mono">08:34:09</td>
+              <td>spatial</td>
+              <td>BTC/USDT</td>
+              <td class="num mono">2</td>
+              <td class="num mono pnl-flat"><span class="glyph">■</span>±$0.00</td>
+              <td class="num mono">0.55</td>
+              <td><span class="chip order-rejected"><span class="chip-dot"></span>rejected · gross_exposure_breach</span></td>
+            </tr>
+            <tr>
+              <td class="mono">08:33:55</td>
+              <td>spatial</td>
+              <td>SOL/USDT</td>
+              <td class="num mono">2</td>
+              <td class="num mono pnl-negative"><span class="glyph">▼</span>−$0.05</td>
+              <td class="num mono">0.45</td>
+              <td><span class="chip order-rejected"><span class="chip-dot"></span>rejected · profit_below_threshold</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Recent fills -->
+      <section class="section">
+        <h3 class="section-title">Recent Fills</h3>
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Time UTC</th>
+              <th>Exchange</th>
+              <th>Symbol</th>
+              <th>Side</th>
+              <th class="num">Price</th>
+              <th class="num">Qty</th>
+              <th class="num">Fee (USD)</th>
+              <th>State</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="mono">08:34:38.412</td>
+              <td>binance</td>
+              <td>BTC/USDT</td>
+              <td><span class="chip order-filled"><span class="chip-dot"></span>buy</span></td>
+              <td class="num mono">60,001.00</td>
+              <td class="num mono">0.001</td>
+              <td class="num mono">0.060</td>
+              <td><span class="chip order-filled"><span class="chip-dot"></span>filled</span></td>
+            </tr>
+            <tr>
+              <td class="mono">08:34:38.413</td>
+              <td>bybit</td>
+              <td>BTC/USDT</td>
+              <td><span class="chip order-rejected"><span class="chip-dot"></span>sell</span></td>
+              <td class="num mono">60,800.00</td>
+              <td class="num mono">0.001</td>
+              <td class="num mono">0.061</td>
+              <td><span class="chip order-filled"><span class="chip-dot"></span>filled</span></td>
+            </tr>
+            <tr>
+              <td class="mono">08:34:31.220</td>
+              <td>binance</td>
+              <td>ETH/USDT</td>
+              <td><span class="chip order-filled"><span class="chip-dot"></span>buy</span></td>
+              <td class="num mono">3,001.50</td>
+              <td class="num mono">0.010</td>
+              <td class="num mono">0.300</td>
+              <td><span class="chip order-partial"><span class="chip-dot"></span>partial (0.007 / 0.010)</span></td>
+            </tr>
+            <tr>
+              <td class="mono">08:34:31.224</td>
+              <td>bybit</td>
+              <td>ETH/USDT</td>
+              <td><span class="chip order-rejected"><span class="chip-dot"></span>sell</span></td>
+              <td class="num mono">3,024.75</td>
+              <td class="num mono">0.010</td>
+              <td class="num mono">0.302</td>
+              <td><span class="chip order-filled"><span class="chip-dot"></span>filled</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Order lifecycle chip showcase (§ 4.4) -->
+      <section class="section">
+        <h3 class="section-title">Order Lifecycle State Reference
+          <span class="section-sub">visual key for the State column above (§ 4.4)</span>
+        </h3>
+        <div class="chip-row">
+          <span class="chip order-pending"><span class="chip-dot"></span>pending</span>
+          <span class="chip order-submitted"><span class="chip-dot"></span>submitted</span>
+          <span class="chip order-partial"><span class="chip-dot"></span>partial</span>
+          <span class="chip order-filled"><span class="chip-dot"></span>filled</span>
+          <span class="chip order-cancelled"><span class="chip-dot"></span>cancelled</span>
+          <span class="chip order-rejected"><span class="chip-dot"></span>rejected</span>
+          <span class="chip order-failed"><span class="chip-dot"></span>failed</span>
+        </div>
+        <p class="small" style="margin-top: 8px;">
+          <code>rejected</code> = exchange said no. <code>failed</code> = network or
+          system fault. Operator triage path differs.
+        </p>
+      </section>
+
+      <!-- Empty / stale states (§ 9) -->
+      <section class="section">
+        <h3 class="section-title">Empty &amp; Stale State Examples
+          <span class="section-sub">every list defines no-data, fetch-failed, and stale states</span>
+        </h3>
+        <div class="row">
+          <div class="col">
+            <div class="empty">
+              <div class="empty-icon">·</div>
+              <strong>No data yet</strong><br/>
+              Waiting for first market snapshot — check venue connection state.
+            </div>
+          </div>
+          <div class="col">
+            <div class="alert" style="background: var(--bg-paper); border: 1px solid var(--error); color: var(--error);">
+              <span style="font-size: 18px;">!</span>
+              <div>
+                <strong>Fetch failed</strong>
+                <div class="small" style="color: var(--text-secondary);">Network error contacting binance. <a href="#" style="color: var(--primary);">Retry</a></div>
+              </div>
+            </div>
+          </div>
+          <div class="col">
+            <div class="card">
+              <div class="card-header">
+                Stale data
+                <span class="stale-chip" style="margin-left: 8px;">42s ago</span>
+              </div>
+              <div class="card-value mono">60,001.00</div>
+              <div class="card-meta">Showing last known value. Refresh in progress.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Footer note -->
+      <section class="section">
+        <p class="small">
+          <strong>This is a design-language smoke.</strong>
+          Real dashboard (step 2) replaces mock data with live polling of
+          <code>logs/decisions.jsonl</code> and structured stdout events; UI components
+          migrate to <code>@mui/material@^6</code> + <code>@mui/x-data-grid</code> in a
+          Vite project at <code>dashboard/</code>. Color tokens, typography, latency tiers,
+          P&amp;L direction glyphs, order lifecycle chip palette, kill-switch behaviour,
+          and dense default density are all final per <code>specs/DESIGN_LANGUAGE.md</code>.
+        </p>
+      </section>
+
+    </main>
+  </div>
+
+  <script>
+    // Theme toggle  ───────────────────────────────────────────
+    function toggleTheme() {
+      const root = document.documentElement;
+      const cur = root.getAttribute('data-theme');
+      const next = cur === 'dark' ? 'light' : 'dark';
+      root.setAttribute('data-theme', next);
+      document.getElementById('theme-icon').textContent = next === 'dark' ? '☾' : '☀';
+      document.getElementById('theme-label').textContent = next === 'dark' ? 'Dark' : 'Light';
+      try { localStorage.setItem('aa.theme', next); } catch (_) {}
+    }
+    (function restoreTheme() {
+      try {
+        const saved = localStorage.getItem('aa.theme');
+        if (saved && saved !== 'dark') toggleTheme();
+      } catch (_) {}
+    })();
+
+    // Kill-switch toggle (§ 4.5)  ─────────────────────────────
+    let killEngaged = false;
+    function toggleKill() {
+      killEngaged = !killEngaged;
+      document.body.classList.toggle('kill-engaged', killEngaged);
+      document.getElementById('kill-banner').style.display = killEngaged ? 'flex' : 'none';
+      const chip = document.getElementById('killswitch-chip');
+      const btn  = document.getElementById('killswitch-btn');
+      if (killEngaged) {
+        chip.style.color = '#FFFFFF';
+        chip.style.background = 'rgba(0,0,0,0.3)';
+        chip.querySelector('span:last-child').textContent = 'Kill-switch: ENGAGED';
+        btn.textContent = 'Reset (operator)';
+        document.title = '[KILL] Arbitrage Agent — Operator Dashboard (design smoke)';
+      } else {
+        chip.style.color = 'var(--success)';
+        chip.style.background = 'var(--success)';
+        chip.querySelector('span:last-child').textContent = 'Kill-switch: OFF';
+        btn.textContent = 'Engage kill-switch';
+        document.title = 'Arbitrage Agent — Operator Dashboard (design smoke)';
+      }
+    }
+  </script>
+</body>
+</html>

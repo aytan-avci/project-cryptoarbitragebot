@@ -1,0 +1,30 @@
+# Pre-commit hooks (SECURITY.md S1).
+#
+# Setup (one-time):
+#   pip install pre-commit
+#   pre-commit install
+#
+# Subsequent commits are scanned automatically. CI re-runs the same scan
+# (.github/workflows/security.yml) so a `git commit --no-verify` bypass
+# is caught at PR time.
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+        # Use the project-local config; do not fall back to gitleaks's
+        # built-in only.
+        args: ["--config=.gitleaks.toml"]
+
+  # Defence-in-depth: even if gitleaks is bypassed, this script verifies
+  # `.env.example` values stay empty / on the allowlist. Catches the
+  # most common leak vector (operator pastes real key into the template).
+  - repo: local
+    hooks:
+      - id: check-env-example
+        name: .env.example must contain no real credentials
+        entry: python3 scripts/check_env_example.py
+        language: system
+        files: ^\.env\.example$
+        pass_filenames: false

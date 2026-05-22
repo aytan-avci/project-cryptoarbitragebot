@@ -1,0 +1,74 @@
+// TypeScript mirror of the bot's domain events emitted as JSONL by
+// `src/arbitrage_agent/persistence/decision_log.py`. Keep field names
+// in sync with `specs/ARCHITECTURE.md § 6` exactly.
+
+export type Side = 'buy' | 'sell';
+export type StrategyName = 'spatial' | 'triangular' | 'funding';
+
+export interface SymbolPair {
+  base: string;
+  quote: string;
+}
+
+export interface OrderIntent {
+  exchange: string;
+  symbol: SymbolPair;
+  side: Side;
+  quantity: string; // Decimal as string — preserves precision
+  limit_price: string;
+}
+
+export interface OpportunityEvent {
+  event: 'opportunity_detected';
+  id: string;
+  detected_at: string; // ISO-ish string, e.g. "2026-05-21 09:36:59.274071+00:00"
+  strategy: StrategyName;
+  expected_net_profit_usd: string;
+  confidence: number;
+  valid_for_ms: number;
+  legs: OrderIntent[];
+}
+
+export interface RiskDecisionEvent {
+  event: 'risk_decision';
+  opportunity_id: string;
+  approved: boolean;
+  reason: string;
+  adjusted_quantity: string | null;
+}
+
+export interface FillEvent {
+  event: 'fill';
+  opportunity_id: string;
+  exchange: string;
+  symbol: string; // serialized as "BTC/USDT"
+  side: Side;
+  price: string;
+  volume: string;
+  fee: string;
+  timestamp_utc: string;
+}
+
+export interface SnapshotFetchedEvent {
+  event: 'snapshot_fetched';
+  exchange: string;
+  symbol: string;
+  bid: string;
+  ask: string;
+  bid_size: string;
+  ask_size: string;
+  timestamp_utc: string;
+}
+
+export type LogEvent =
+  | OpportunityEvent
+  | RiskDecisionEvent
+  | FillEvent
+  | SnapshotFetchedEvent;
+
+export interface KillSwitchState {
+  engaged: boolean;
+  reason?: string;
+  engaged_at_utc?: string;
+  reset_at_utc?: string;
+}

@@ -1,0 +1,74 @@
+# gitleaks config — first-line secret-scan defence (SECURITY.md S1).
+# Run at pre-commit time (.pre-commit-config.yaml) AND in CI
+# (.github/workflows/security.yml). Either trip blocks the change.
+
+title = "Crypto Arbitrage Agent — gitleaks config"
+
+[extend]
+# Start from gitleaks's built-in ruleset (covers AWS, GitHub, generic
+# entropy, etc.) and extend with our exchange-specific patterns.
+useDefault = true
+
+# ---------- Custom rules ---------------------------------------------------
+
+[[rules]]
+id = "binance-api-key"
+description = "Binance API key (64 alphanumeric chars)"
+regex = '''(?i)binance[_-]?api[_-]?key[\s:=]+['"]?([A-Za-z0-9]{64})['"]?'''
+secretGroup = 1
+tags = ["binance", "key"]
+
+[[rules]]
+id = "binance-api-secret"
+description = "Binance API secret (64 alphanumeric chars)"
+regex = '''(?i)binance[_-]?api[_-]?secret[\s:=]+['"]?([A-Za-z0-9]{64})['"]?'''
+secretGroup = 1
+tags = ["binance", "secret"]
+
+[[rules]]
+id = "bybit-api-key"
+description = "Bybit API key (typical 18+ alphanumeric)"
+regex = '''(?i)bybit[_-]?api[_-]?key[\s:=]+['"]?([A-Za-z0-9]{18,})['"]?'''
+secretGroup = 1
+tags = ["bybit", "key"]
+
+[[rules]]
+id = "bybit-api-secret"
+description = "Bybit API secret (36+ alphanumeric)"
+regex = '''(?i)bybit[_-]?api[_-]?secret[\s:=]+['"]?([A-Za-z0-9]{36,})['"]?'''
+secretGroup = 1
+tags = ["bybit", "secret"]
+
+[[rules]]
+id = "hmac-hex-digest"
+description = "Bare 64-hex-char HMAC SHA-256 digest in source"
+regex = '''(?i)(hmac|signature|sig)[\s:=]+['"]?([a-f0-9]{64})['"]?'''
+secretGroup = 2
+tags = ["crypto", "hmac"]
+
+# ---------- Allowlist ------------------------------------------------------
+# .env.example is the template; values must remain empty strings or
+# placeholders. The scanner ignores it on the assumption operators do
+# not commit real values to it.
+
+[allowlist]
+description = "Whitelist for known false positives"
+# CRITICAL — DO NOT add `.env.example` here. The whole point of the
+# template file is that the scanner verifies its values stay empty.
+# Allowlisting it defeats the protection for the most common leak
+# vector (operator pastes real key into the template by mistake).
+# Incident on 2026-05-22 — see MEMORY.md § Gotchas.
+paths = [
+    '''dashboard/smoke\.html$''',          # contains mock fake UUIDs only
+    '''specs/SECURITY\.md$''',             # documents patterns; no real keys
+    '''\.gitleaks\.toml$''',               # this file itself contains regex
+    '''tests/.*$''',                       # tests use 'sk-real-key' etc. literals
+]
+
+regexes = [
+    # Test-only mock values
+    '''sk-real-key''',
+    '''hunter2''',
+    '''SHOULD_NOT_LEAK''',
+    '''REAL_LEAKED_VALUE''',
+]
