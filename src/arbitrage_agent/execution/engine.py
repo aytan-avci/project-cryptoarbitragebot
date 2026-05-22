@@ -32,6 +32,7 @@ from arbitrage_agent.domain import (
 )
 from arbitrage_agent.exchanges.base import ExchangeAdapter
 from arbitrage_agent.execution.reconciler import classify_leg
+from arbitrage_agent.observability import metrics
 
 _log = structlog.get_logger()
 
@@ -51,7 +52,8 @@ async def _submit_one_leg(
     fills: list[Fill] = []
 
     async def _do_submit() -> OrderId:
-        return await adapter.place_order(leg, decision)
+        with metrics.leg_placement_seconds.labels(exchange=str(leg.exchange)).time():
+            return await adapter.place_order(leg, decision)
 
     try:
         order_id = await asyncio.wait_for(_do_submit(), timeout=timeout_s)

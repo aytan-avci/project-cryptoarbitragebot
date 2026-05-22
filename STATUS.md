@@ -6,25 +6,36 @@
 
 ---
 
-**(C) Dashboard zenginleştirme tamam.** Audit log schema'sı yeni
-`event="hedger_result"` ile genişledi (`DecisionLog.append_hedger_
-result(HedgeResult)`); pipeline `_handle_hedge` her hedge sonrası
-çağırır → operatör ne fill oldu (event="fill") değil, hedge'in
-NEDEN/NASIL çalıştığını da görür (status, counter_leg dict,
-remaining_exposure, reason). Dashboard tarafı: `types.ts`
-`HedgerResultEvent` + `TestnetEvidence` interface'leri; `dataModel.ts`
-`useTestnetEvidence` hook (5s polling) + `hedgerResults` filter +
-`summarizeTestnetEvidence` (days/30, eligible/probationary). Yeni iki
-component: `HedgeActivity.tsx` (no_imbalance'ı eler, sadece müdahale
-gerektirenleri tablo halinde) + `SecurityStatus.tsx` (probation
-LinearProgress + first/last seen + venue list + eligible chip). Vite
-middleware zaten `/logs/*` serve ediyordu, `testnet_evidence.json` ek
-config gerektirmedi. Smoke: `npm run build` temiz, 386 KB JS / 52 KB
-CSS; pipeline 3 iter + manual hedge inject → audit log 20 satır
-hash-chain intact, 1 hedger_result entry, 3 endpoint (decisions.jsonl,
-testnet_evidence.json, /api/kill-switch) HTTP 200. **336/336 pytest
-yeşil** (önceki 334 + 2 hedger_result event testi). Sıralı sonraki:
-(D) Performance + observability.
+**(D) Performance + observability tamam.** Prometheus metrics
+pipeline'a entegre. Yeni `observability/metrics.py` modülü:
+4 counter (opportunities/decisions/fills/hedge_results, labelled),
+2 histogram (pipeline_iteration_seconds 0.01-30s buckets,
+leg_placement_seconds per exchange), 2 gauge (kill_switch_engaged,
+daily_pnl_usd). `serve_metrics(port, host)` aiohttp endpoint
+non-blocking, idempotent; `stop_metrics()` cleanup. Settings:
+`metrics_enabled: bool = False` + `metrics_port: int = 9090`
+opt-in. Wired into REST + WS pipeline modlarına ve
+`execution/engine._submit_one_leg` leg timer'ına. `prometheus-client
+>=0.21` yeni top-level dep (de-facto Prometheus standardı,
+stdlib-only iç bağımlılık). **347/347 pytest yeşil** (önceki 336 +
+10 metrics unit + 1 pipeline integration). Smoke: in-process driver
++ curl `http://127.0.0.1:9091/metrics` → tam Prometheus exposition
+formatı (counters + histogram buckets + sum/count + gauges).
+
+## Last session ended at
+**2026-05-23** — (D) Performance + observability:
+`observability/metrics.py` stub'ı tam modüle dönüştü; module-local
+`CollectorRegistry` global state sızdırmıyor. Counter inc'leri
+pipeline'da mevcut `counters` dict bump'larıyla yan yana
+(REST + WS), `pipeline_iteration_seconds` context-manager timer,
+`leg_placement_seconds` execution.engine'de `place_order` timer'ı,
+`kill_switch_engaged` daily-loss kill firing'inde set, `daily_pnl_usd`
+her fill sonrası `float(tracker.daily_pnl_usd)`. aiohttp
+`/metrics` endpoint Prometheus `CONTENT_TYPE_LATEST` header'ı
+direkt geçirir (aiohttp `content_type=` kwarg charset reddediyordu).
+Test fixture'ı `metrics.clear_for_tests()` labelled metric'leri ve
+gauge'ları sıfırlar. Yeni `tests/unit/observability/test_metrics.py`
+(10 test) + integration test (pipeline.run → counter assertions).
 
 ## Last session ended at
 **2026-05-23** — (C) Dashboard zenginleştirme: `DecisionLog.append_

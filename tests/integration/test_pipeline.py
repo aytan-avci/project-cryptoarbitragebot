@@ -230,3 +230,48 @@ def test_pipeline_hedge_fills_flow_through_audit_log_and_tracker(
 
     # 3) counters bumped by hedge fill count.
     assert counters["fills"] == 1
+
+
+def test_pipeline_emits_prometheus_metrics(monkeypatch, tmp_path: Path):
+    """Faz (D) — pipeline.run() increments the right Prometheus
+    counters and histograms. We don't bind a port; the metrics module
+    works against an in-process registry."""
+    from arbitrage_agent.observability import metrics
+
+    monkeypatch.chdir(tmp_path)
+    _clean_env(monkeypatch)
+    metrics.clear_for_tests()
+
+    s = Settings(pipeline_iterations=2)
+    summary = asyncio.run(
+        pipeline.run(s, snapshot_seeds=_wide_spread_seeds())
+    )
+
+    # Counter samples match the in-process counters dict.
+    opp_count = metrics.REGISTRY.get_sample_value(
+        "arbitrage_opportunities_total", {"strategy": "spatial"},
+    )
+    assert opp_count == summary["opportunities"]
+
+    approved = metrics.REGISTRY.get_sample_value(
+        "arbitrage_decisions_total", {"outcome": "approved"},
+    )
+    assert approved == summary["approved"]
+
+    # Each iteration that produced an opportunity also observed at least
+    # one histogram sample.
+    hist_count = metrics.REGISTRY.get_sample_value(
+        "arbitrage_pipeline_iteration_seconds_count",
+    )
+    assert hist_count is not None and hist_count >= summary["opportunities"]
+
+    # leg_placement_seconds gets one observation per leg per approved opp.
+    for venue in ("binance", "bybit"):
+        leg_count = metrics.REGISTRY.get_sample_value(
+            "arbitrage_leg_placement_seconds_count", {"exchange": venue},
+        )
+        # paper happy-path means every approved opportunity attempted
+        # every leg.
+        assert leg_count == summary["approved"], (
+            f"venue={venue} leg_count={leg_count} approved={summary['approved']}"
+        )

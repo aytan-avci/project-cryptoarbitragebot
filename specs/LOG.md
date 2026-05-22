@@ -272,6 +272,73 @@ artefacts.
 - `SECURITY.md § 7 Change Log` — incident row + S1 strengthening row.
 - 224/224 pytest passing (218 + 6 lint tests).
 
+## [2026-05-23] setup | (D) Performance + observability — Prometheus metrics (347 tests PASS)
+**Goal**: surface counters, gauges, and latency histograms via the
+standard Prometheus scrape endpoint so the bot is operable from
+Grafana / alertmanager without any custom plumbing.
+**New dep**: `prometheus-client >= 0.21`. Pure-Python, ~60 KB,
+stdlib-only deps. De-facto standard; rolling our own exposition
+format would be wasteful.
+**New module (`observability/metrics.py`)** — stub turned into the
+real thing:
+- Module-local `CollectorRegistry` (no leakage into
+  prometheus_client's default global; tests stay isolated).
+- 4 counters: `arbitrage_opportunities_total{strategy}`,
+  `arbitrage_decisions_total{outcome}`,
+  `arbitrage_fills_total{exchange, side}`,
+  `arbitrage_hedge_results_total{status}`.
+- 2 histograms: `arbitrage_pipeline_iteration_seconds`
+  (buckets 0.01..30s; covers paper sub-ms and live multi-second
+  iterations), `arbitrage_leg_placement_seconds{exchange}`
+  (buckets 0.005..5s).
+- 2 gauges: `arbitrage_kill_switch_engaged` (0|1),
+  `arbitrage_daily_pnl_usd` (mirrors tracker.daily_pnl_usd).
+- `async serve_metrics(port, host)` — aiohttp `TCPSite` exposing
+  `GET /metrics`. Idempotent (returns the active runner if already
+  started). `Content-Type` set via raw header because aiohttp's
+  `content_type=` kwarg rejects `CONTENT_TYPE_LATEST`'s
+  `charset=utf-8` parameter.
+- `async stop_metrics()` — safe no-op when no runner active.
+- `clear_for_tests()` — resets labelled metrics + gauges
+  (intentionally leaves unlabelled histograms alone; tests using
+  them assert via deltas).
+**Settings**: `metrics_enabled: bool = False` (opt-in so paper
+smoke runs don't bind a port), `metrics_port: int = 9090`,
+`metrics_host: str = "127.0.0.1"`.
+**Wiring**:
+- `orchestration/pipeline.run`: starts `serve_metrics` if enabled,
+  stops it after `_close_adapters`. Both REST-poll and WS modes
+  emit `opportunities_total`, `decisions_total`, `fills_total`,
+  `hedge_results_total`, `pipeline_iteration_seconds` (REST mode
+  via `with histogram.time(): ...` wrapping the iteration body),
+  `daily_pnl_usd` (set after every fill batch), and toggle
+  `kill_switch_engaged` when `_maybe_engage_daily_loss_kill`
+  returns True.
+- `execution/engine._submit_one_leg`: `leg_placement_seconds`
+  histogram observes `place_order` latency via
+  `with metrics.leg_placement_seconds.labels(...).time(): ...`.
+**Tests**:
+- `tests/unit/observability/test_metrics.py` (new, 10 tests —
+  per-counter increment + label separation, gauge set/reset,
+  histogram observe, HTTP exposition format, idempotent start,
+  safe stop-when-not-started).
+- `tests/integration/test_pipeline.py` gains one integration test
+  driving `pipeline.run()` then asserting counter sample equality
+  against the returned summary counters (opportunities, approved,
+  leg_placement_seconds_count per venue).
+- `pyproject.toml`: license flipped Proprietary → Apache-2.0
+  (matches LICENSE shipped in commit 200e75e); dependencies grew
+  by `prometheus-client>=0.21`.
+**Smoke**: in-process driver running `serve_metrics` on port 9091 +
+exercising every metric → `curl /metrics` returned the canonical
+Prometheus exposition (counter lines, histogram buckets + sum +
+count, gauge values, label fragmentation per exchange/side). The
+HTTP endpoint also works mid-`pipeline.run` (only briefly — paper
+iterations finish in microseconds, so curl needs to race; live REST
+mode at 1+ s/iter is the realistic case).
+**Test count**: 347 (was 336; +10 metrics unit + +1 pipeline
+integration).
+
 ## [2026-05-23] setup | (C) dashboard enrichment — hedger events + S7 panel (336 tests PASS)
 **Goal**: surface two pieces of operational state the dashboard
 previously couldn't see — (a) what the real hedger (Faz 7g-c) did

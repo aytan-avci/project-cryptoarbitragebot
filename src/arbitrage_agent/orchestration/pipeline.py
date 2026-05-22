@@ -33,6 +33,7 @@ from arbitrage_agent.exchanges.paper import PaperExchange
 from arbitrage_agent.exchanges.registry import build_live_adapters
 from arbitrage_agent.execution.engine import execute
 from arbitrage_agent.execution.hedger import hedge as run_hedge
+from arbitrage_agent.observability import metrics
 from arbitrage_agent.ingestion.bus import LatestSnapshotView, MarketDataBus
 from arbitrage_agent.orchestration.account_state_tracker import AccountStateTracker
 from arbitrage_agent.orchestration.clock import SystemClock
@@ -172,93 +173,116 @@ async def run(
         confidence=settings.spatial_confidence,
     )
 
+    # Faz (D) — optional Prometheus exposition. Default off.
+    metrics_runner = None
+    if settings.metrics_enabled and settings.metrics_port > 0:
+        metrics_runner = await metrics.serve_metrics(
+            settings.metrics_port, settings.metrics_host,
+        )
+        _log.info(
+            "pipeline.metrics_enabled",
+            host=settings.metrics_host, port=settings.metrics_port,
+        )
+
     for iter_idx in range(settings.pipeline_iterations):
         counters["iterations"] += 1
 
-        # 0. Periodic balance polling (Faz 7g-a). Throttled by
-        # `balance_poll_per_iterations`; 0 disables.
-        if (
-            settings.balance_poll_per_iterations > 0
-            and iter_idx % settings.balance_poll_per_iterations == 0
-        ):
-            await _poll_balances(adapters, tracker, Asset("USDT"))
+        with metrics.pipeline_iteration_seconds.time():
+            # 0. Periodic balance polling (Faz 7g-a). Throttled by
+            # `balance_poll_per_iterations`; 0 disables.
+            if (
+                settings.balance_poll_per_iterations > 0
+                and iter_idx % settings.balance_poll_per_iterations == 0
+            ):
+                await _poll_balances(adapters, tracker, Asset("USDT"))
 
-        # 1. Snapshots → view + audit log + tracker (Faz 7f freshness)
-        for adapter in adapters.values():
-            snap = await adapter.fetch_book_snapshot(_BTC)
-            view.update(snap)
-            log_file.append_snapshot(snap)
-            tracker.on_snapshot(snap)
-            counters["snapshots"] += 1
+            # 1. Snapshots → view + audit log + tracker (Faz 7f freshness)
+            for adapter in adapters.values():
+                snap = await adapter.fetch_book_snapshot(_BTC)
+                view.update(snap)
+                log_file.append_snapshot(snap)
+                tracker.on_snapshot(snap)
+                counters["snapshots"] += 1
 
-        # 2. Strategy
-        opp = strategy.evaluate(view, clk)
-        if opp is None:
-            _log.info("pipeline.no_opportunity")
-            continue
-        counters["opportunities"] += 1
-        _log.info(
-            "opportunity.detected",
-            id=opp.id,
-            expected_net_profit_usd=str(opp.expected_net_profit),
-            legs=len(opp.legs),
-        )
-        log_file.append_opportunity(opp)
-
-        # 3. Risk gate — tracker snapshot carries Faz 7f state
-        decision = risk_evaluate(opp, tracker.snapshot(clk.now_ms()), limits, clk.now_ms())
-        log_file.append_decision(decision)
-        if not decision.approved:
-            counters["rejected"] += 1
+            # 2. Strategy
+            opp = strategy.evaluate(view, clk)
+            if opp is None:
+                _log.info("pipeline.no_opportunity")
+                continue
+            counters["opportunities"] += 1
+            metrics.opportunities_total.labels(strategy=opp.strategy).inc()
             _log.info(
-                "risk.rejected",
+                "opportunity.detected",
+                id=opp.id,
+                expected_net_profit_usd=str(opp.expected_net_profit),
+                legs=len(opp.legs),
+            )
+            log_file.append_opportunity(opp)
+
+            # 3. Risk gate — tracker snapshot carries Faz 7f state
+            decision = risk_evaluate(opp, tracker.snapshot(clk.now_ms()), limits, clk.now_ms())
+            log_file.append_decision(decision)
+            if not decision.approved:
+                counters["rejected"] += 1
+                metrics.decisions_total.labels(outcome="rejected").inc()
+                _log.info(
+                    "risk.rejected",
+                    opportunity_id=decision.opportunity_id,
+                    reason=decision.reason,
+                )
+                continue
+            counters["approved"] += 1
+            metrics.decisions_total.labels(outcome="approved").inc()
+            _log.info(
+                "risk.approved",
                 opportunity_id=decision.opportunity_id,
                 reason=decision.reason,
             )
-            continue
-        counters["approved"] += 1
-        _log.info(
-            "risk.approved",
-            opportunity_id=decision.opportunity_id,
-            reason=decision.reason,
-        )
 
-        # 4. Execute (concurrent, with per-leg timeout). Tracker records
-        # the submission timestamps for the orders/min rolling cap.
-        tracker.on_intent_submitted(list(opp.legs), clk.now_ms())
-        result = await execute(opp, decision, adapters)
-        _log.info(
-            "execution.submitted",
-            opportunity_id=opp.id,
-            order_ids=[lr.order_id for lr in result.legs if lr.order_id],
-            states=[lr.state for lr in result.legs],
-        )
-
-        # 5. Log per-leg fills + tracker positions + hedger alert if imbalanced
-        for leg_result in result.legs:
-            for fill in leg_result.fills:
-                log_file.append_fill(fill)
-                tracker.on_fill(fill)
-                counters["fills"] += 1
-                _log.info(
-                    "execution.fill",
-                    exchange=fill.exchange,
-                    side=fill.side,
-                    price=str(fill.price),
-                    volume=str(fill.volume),
-                    fee_usd=str(fill.fee),
-                )
-        if result.needs_hedge:
-            await _handle_hedge(
-                opp, result, adapters, view, settings,
-                log_file, tracker, counters,
+            # 4. Execute (concurrent, with per-leg timeout). Tracker records
+            # the submission timestamps for the orders/min rolling cap.
+            tracker.on_intent_submitted(list(opp.legs), clk.now_ms())
+            result = await execute(opp, decision, adapters)
+            _log.info(
+                "execution.submitted",
+                opportunity_id=opp.id,
+                order_ids=[lr.order_id for lr in result.legs if lr.order_id],
+                states=[lr.state for lr in result.legs],
             )
 
-        # 6. Daily-loss auto-kill (Faz 7g-a). Runs after every iteration's
-        # fills have updated tracker.daily_pnl_usd.
-        _maybe_engage_daily_loss_kill(tracker, settings)
+            # 5. Log per-leg fills + tracker positions + hedger alert if imbalanced
+            for leg_result in result.legs:
+                for fill in leg_result.fills:
+                    log_file.append_fill(fill)
+                    tracker.on_fill(fill)
+                    counters["fills"] += 1
+                    metrics.fills_total.labels(
+                        exchange=str(fill.exchange), side=fill.side,
+                    ).inc()
+                    _log.info(
+                        "execution.fill",
+                        exchange=fill.exchange,
+                        side=fill.side,
+                        price=str(fill.price),
+                        volume=str(fill.volume),
+                        fee_usd=str(fill.fee),
+                    )
+            metrics.daily_pnl_usd.set(float(tracker.daily_pnl_usd))
+            if result.needs_hedge:
+                await _handle_hedge(
+                    opp, result, adapters, view, settings,
+                    log_file, tracker, counters,
+                )
+
+            # 6. Daily-loss auto-kill (Faz 7g-a). Runs after every iteration's
+            # fills have updated tracker.daily_pnl_usd.
+            engaged = _maybe_engage_daily_loss_kill(tracker, settings)
+            if engaged:
+                metrics.kill_switch_engaged.set(1)
 
     await _close_adapters(adapters)
+    if metrics_runner is not None:
+        await metrics.stop_metrics()
     return counters
 
 
@@ -325,12 +349,16 @@ async def _handle_hedge(
         log_file.append_fill(fill)
         tracker.on_fill(fill)
         counters["fills"] += 1
+        metrics.fills_total.labels(
+            exchange=str(fill.exchange), side=fill.side,
+        ).inc()
         _log.info(
             "hedger.fill",
             exchange=fill.exchange, side=fill.side,
             price=str(fill.price), volume=str(fill.volume),
             fee_usd=str(fill.fee),
         )
+    metrics.hedge_results_total.labels(status=hedge_result.status).inc()
     # Audit-trail entry for the hedger decision itself — feeds the
     # dashboard's Hedge Activity panel (Faz (C)).
     log_file.append_hedger_result(hedge_result)
@@ -424,11 +452,13 @@ async def _run_ws(
             if opp is None:
                 return
             counters["opportunities"] += 1
+            metrics.opportunities_total.labels(strategy=opp.strategy).inc()
             log_file.append_opportunity(opp)
             decision = risk_evaluate(opp, tracker.snapshot(clk.now_ms()), limits, clk.now_ms())
             log_file.append_decision(decision)
             if not decision.approved:
                 counters["rejected"] += 1
+                metrics.decisions_total.labels(outcome="rejected").inc()
                 _log.info(
                     "risk.rejected",
                     opportunity_id=decision.opportunity_id,
@@ -436,6 +466,7 @@ async def _run_ws(
                 )
                 return
             counters["approved"] += 1
+            metrics.decisions_total.labels(outcome="approved").inc()
             _log.info(
                 "risk.approved",
                 opportunity_id=decision.opportunity_id,
@@ -454,12 +485,16 @@ async def _run_ws(
                     log_file.append_fill(fill)
                     tracker.on_fill(fill)
                     counters["fills"] += 1
+                    metrics.fills_total.labels(
+                        exchange=str(fill.exchange), side=fill.side,
+                    ).inc()
                     _log.info(
                         "execution.fill",
                         exchange=fill.exchange, side=fill.side,
                         price=str(fill.price), volume=str(fill.volume),
                         fee_usd=str(fill.fee),
                     )
+            metrics.daily_pnl_usd.set(float(tracker.daily_pnl_usd))
             if result.needs_hedge:
                 await _handle_hedge(
                     opp, result, adapters, view, settings,
@@ -467,7 +502,8 @@ async def _run_ws(
                 )
 
             # Daily-loss auto-kill (Faz 7g-a)
-            _maybe_engage_daily_loss_kill(tracker, settings)
+            if _maybe_engage_daily_loss_kill(tracker, settings):
+                metrics.kill_switch_engaged.set(1)
 
     bus.subscribe(on_snapshot)
 

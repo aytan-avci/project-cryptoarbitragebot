@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     risk_testnet_evidence_path: Path = Path("logs/testnet_evidence.json")
     s7_min_testnet_days: int = 30
 
+    # Faz (D) — Prometheus metrics exposition. Default off so paper
+    # smoke runs don't bind a port. `metrics_port=0` is reserved as
+    # "disabled" alongside `metrics_enabled=False` for explicit kill.
+    metrics_enabled: bool = False
+    metrics_port: int = 9090
+    metrics_host: str = "127.0.0.1"
+
     # Kill-switch durable state (sync JSON). `logs/` is gitignored.
     risk_kill_switch_path: Path = Path("logs/kill_switch.json")
 
