@@ -75,6 +75,10 @@ class Settings(BaseSettings):
     # Kill-switch durable state (sync JSON). `logs/` is gitignored.
     risk_kill_switch_path: Path = Path("logs/kill_switch.json")
 
+    # Strategy selector (Faz (B)). MVP supports one strategy per
+    # deployment (CLAUDE.md C8); flip this env to swap.
+    strategy_name: Literal["spatial", "triangular"] = "spatial"
+
     # Spatial strategy parameters (skills/arbitrage-detection/SKILL.md).
     # Per-strategy thresholds live in config (QA-5.3).
     spatial_size_btc: Decimal = Decimal("0.001")
@@ -83,6 +87,21 @@ class Settings(BaseSettings):
     spatial_min_profit_threshold_usd: Decimal = Decimal("0.50")
     spatial_valid_for_ms: int = 1000
     spatial_confidence: float = 0.9
+
+    # Triangular strategy parameters (Faz (B)). Single-venue cycle
+    # over three pairs: intermediate/quote, base/quote, base/intermediate.
+    # Default cycle: USDT → BTC → ETH → USDT (and reverse) on the
+    # configured venue. `triangular_venue` MUST match an enabled
+    # adapter at runtime.
+    triangular_venue: str = "binance"
+    triangular_quote: str = "USDT"
+    triangular_intermediate: str = "BTC"
+    triangular_base: str = "ETH"
+    triangular_size_quote: Decimal = Decimal("50")  # USDT notional
+    triangular_taker_fee_bps: int = 10
+    triangular_min_profit_threshold_usd: Decimal = Decimal("0.50")
+    triangular_valid_for_ms: int = 1000
+    triangular_confidence: float = 0.85
 
     # Orchestration / pipeline (Faz 6).
     pipeline_iterations: int = 1

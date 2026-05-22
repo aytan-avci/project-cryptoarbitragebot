@@ -6,21 +6,41 @@
 
 ---
 
-**(D) Performance + observability tamam.** Prometheus metrics
-pipeline'a entegre. Yeni `observability/metrics.py` modülü:
-4 counter (opportunities/decisions/fills/hedge_results, labelled),
-2 histogram (pipeline_iteration_seconds 0.01-30s buckets,
-leg_placement_seconds per exchange), 2 gauge (kill_switch_engaged,
-daily_pnl_usd). `serve_metrics(port, host)` aiohttp endpoint
-non-blocking, idempotent; `stop_metrics()` cleanup. Settings:
-`metrics_enabled: bool = False` + `metrics_port: int = 9090`
-opt-in. Wired into REST + WS pipeline modlarına ve
-`execution/engine._submit_one_leg` leg timer'ına. `prometheus-client
->=0.21` yeni top-level dep (de-facto Prometheus standardı,
-stdlib-only iç bağımlılık). **347/347 pytest yeşil** (önceki 336 +
-10 metrics unit + 1 pipeline integration). Smoke: in-process driver
-+ curl `http://127.0.0.1:9091/metrics` → tam Prometheus exposition
-formatı (counters + histogram buckets + sum/count + gauges).
+**(B) Triangular strategy tamam.** `strategies/triangular.py` stub'ı
+gerçek modüle dönüştü: `TriangularArbitrage` Strategy protokolüne
+uyuyor, `evaluate(view, clock)` pure function, üç pair (intermediate/
+quote, base/quote, base/intermediate) üzerinde forward (Q→I→B→Q)
+ve reverse (Q→B→I→Q) cycle math yapar, daha karlı path'i tek
+`Opportunity` (3 leg) olarak yayar. Strategy protocol'a `symbols` +
+`min_venues` property'leri eklendi (Spatial=1 sym/2 venue,
+Triangular=3 sym/1 venue). Pipeline `_build_strategy(settings,
+exchange_ids)` helper'ı `strategy_name` env'ine göre switch ediyor,
+snapshot fetch loop `strategy.symbols` üzerinde geziyor (KeyError'da
+skip), single-venue short-circuit `< min_venues` koşuluna bağlandı.
+WS mode subscribe artık `strategy.symbols`. Yeni 11 config alanı
+(strategy_name + 9 triangular + venue switch). **361/361 pytest
+yeşil** (önceki 347 + 12 triangular unit + 2 pipeline integration).
+End-to-end smoke: paper Binance'a 3 pair seed → triangular cycle
+ETH/BTC undervalued senaryosunda $1.61 net profit ile detect edildi.
+Known limitation: risk gate'in `min_order_value_usd` check'i
+USDT-denominated, ETH/BTC leg'in BTC-denominated limit_price'ında
+yanlış pozitif reddediyor; operatör bu strategy için gate'i
+calibrate edecek veya cross-pair currency conversion v2'de eklenecek.
+
+## Last session ended at
+**2026-05-23** — (B) Triangular strategy: `strategies/triangular.py`
+TriangularArbitrage class + Strategy protokolü; `symbols` property
+3 pair, `min_venues=1`. Spatial'a aynı property'ler eklendi.
+`config.py` `strategy_name: Literal["spatial","triangular"]` switch +
+`triangular_*` 9 param. Pipeline `_build_strategy` helper +
+`strategy.symbols` üzerinde snapshot fetch + min_venues kontrolü;
+single-venue short-circuit artık `len(adapters) < strategy.min_venues`
+ile koşulluyor. WS subscribe `strategy.symbols` listesi ile çağırıyor.
+Test count: 12 yeni triangular unit + 2 pipeline integration; mevcut
+"at least two seeded exchanges" testi regex'i `at least 2 seeded
+exchange` ile değiştirildi (string yerine sayı). Smoke: 1 venue × 3
+seed → cycle detect, gate ETH/BTC leg'inin min_order_value'da rejct
+etti (BTC vs USDT unit mismatch, MEMORY'de işaretli).
 
 ## Last session ended at
 **2026-05-23** — (D) Performance + observability:

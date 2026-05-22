@@ -691,6 +691,56 @@
   mainnet URL configured and asserts that NO file is written is the
   canonical regression test.
 
+### 2026-05-23 — Risk gate's min_order_value_usd assumes USDT-denominated limit_price; triangular intermediate leg breaks this assumption
+- **What:** Faz (B) triangular strategy emits 3 legs; one of them
+  swaps base↔intermediate (e.g. ETH/BTC). The `limit_price` of that
+  leg is in BTC, not USDT. The risk gate computes leg order value
+  as `limit_price × quantity` and compares to
+  `risk_min_order_value_usd` (USDT scale). For an ETH/BTC leg at
+  `0.049 × 0.166 = 0.0081 BTC`, the gate sees `0.0081 < 20` and
+  rejects — even though the leg's notional is actually ~$490.
+- **Why:** The gate was designed for spot-USDT pairs where the
+  quote currency IS the reporting currency. Triangular's
+  intermediate hop violates this. The check is correct in spirit
+  (don't open trivially-tiny orders) but uses the wrong unit.
+- **How to apply:** Two paths to fix when the operator wants to run
+  triangular for real:
+  (a) Per-leg conversion: convert `limit_price × quantity` to USDT
+      using the latest snapshot for the leg's quote-currency pair
+      (e.g. multiply by BTC/USDT bid for an ETH/BTC leg). Adds a
+      dependency on snapshots in the risk gate that the cardinal-
+      rule check wants to avoid.
+  (b) Per-strategy override: triangular config carries a
+      `min_intermediate_order_value` in the intermediate currency
+      (BTC) so the gate compares apples-to-apples.
+  For now, document the limitation and let operators widen
+  `risk_min_order_value_usd` if they consciously want to allow
+  triangular runs. Default (=20 USDT) is safe — it prevents
+  triangular from ever placing live trades until the gate is
+  upgraded.
+
+### 2026-05-23 — Strategy protocol owns its own symbol set + venue count requirements
+- **What:** Faz (B) extended the Strategy Protocol with two
+  read-only properties: `symbols: list[Symbol]` (what to fetch /
+  subscribe) and `min_venues: int` (minimum adapter count).
+  Pipeline reads these instead of hardcoding `BTC/USDT` and
+  `len(adapters) >= 2`. Spatial → `[symbol], 2`; triangular →
+  `[i/q, b/q, b/i], 1`.
+- **Why:** Without this, the pipeline had a hidden coupling to
+  spatial's two-venues-one-symbol shape. A second strategy would
+  have either (a) required the pipeline to know each strategy's
+  internals or (b) been forced into spatial's mold. The Protocol
+  push delegates the question "what does this strategy need?" to
+  the strategy itself — exactly where it belongs. Adding the
+  funding-rate strategy later will follow the same pattern
+  (single venue, perp + spot pair → `symbols = [perp_sym,
+  spot_sym]`, `min_venues = 1`).
+- **How to apply:** Any new strategy must implement `symbols` and
+  `min_venues` properties. Don't add ad-hoc fields to Settings for
+  "what symbols does strategy X want" — the strategy's own
+  property is the source of truth. Pipeline + adapter glue read
+  through the protocol, never around it.
+
 ### 2026-05-20 — Karpathy's Four Principles are mandatory at every loop
 - **What:** Think Before Coding · Simplicity First · Surgical Changes ·
   Goal-Driven Execution.

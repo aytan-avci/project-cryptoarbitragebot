@@ -41,8 +41,9 @@ from arbitrage_agent.persistence.decision_log import DecisionLog
 from arbitrage_agent.risk import kill_switch as ks_module
 from arbitrage_agent.risk.gate import evaluate as risk_evaluate
 from arbitrage_agent.risk.limits import limits_from_settings
-from arbitrage_agent.strategies.base import Clock
+from arbitrage_agent.strategies.base import Clock, Strategy
 from arbitrage_agent.strategies.spatial import SpatialArbitrage
+from arbitrage_agent.strategies.triangular import TriangularArbitrage
 
 _log = structlog.get_logger()
 _BTC = Symbol("BTC", "USDT")
@@ -81,6 +82,47 @@ def _paper_from_seeds(
             taker_fee_bps=taker_fee_bps,
         )
     return out
+
+
+def _build_strategy(
+    settings: Settings, exchange_ids: list[ExchangeId],
+) -> Strategy:
+    """Pick the active strategy from `settings.strategy_name` and
+    instantiate it with the right config slice. Triangular needs only
+    its configured venue; if absent, falls back to the first available
+    adapter so a paper smoke can still run."""
+    if settings.strategy_name == "triangular":
+        wanted = ExchangeId(settings.triangular_venue)
+        venue = wanted if wanted in exchange_ids else exchange_ids[0]
+        return TriangularArbitrage(
+            exchange=venue,
+            quote=Asset(settings.triangular_quote),
+            intermediate=Asset(settings.triangular_intermediate),
+            base=Asset(settings.triangular_base),
+            size_quote=settings.triangular_size_quote,
+            taker_fee_bps=settings.triangular_taker_fee_bps,
+            min_profit_threshold_usd=settings.triangular_min_profit_threshold_usd,
+            valid_for_ms=settings.triangular_valid_for_ms,
+            confidence=settings.triangular_confidence,
+        )
+    # default: spatial
+    if len(exchange_ids) < 2:
+        # caller will surface this via the min_venues check
+        a = exchange_ids[0] if exchange_ids else ExchangeId("paper")
+        b = a
+    else:
+        a, b = exchange_ids[0], exchange_ids[1]
+    return SpatialArbitrage(
+        symbol=_BTC,
+        exchange_a=a,
+        exchange_b=b,
+        size=volume(str(settings.spatial_size_btc)),
+        taker_fee_bps=settings.spatial_taker_fee_bps,
+        slippage_usd_per_leg=settings.spatial_slippage_usd_per_leg,
+        min_profit_threshold_usd=settings.spatial_min_profit_threshold_usd,
+        valid_for_ms=settings.spatial_valid_for_ms,
+        confidence=settings.spatial_confidence,
+    )
 
 
 async def run(
@@ -136,10 +178,14 @@ async def run(
         )
 
     # ----- single-venue live mode short-circuit -------------------------
-    if mode == "live" and len(adapters) < 2:
-        # Strategy needs ≥2 venues. Faz 7a's single-venue mode just shows
-        # the live price and logs snapshots; Faz 7d (Bybit) restores the
-        # full strategy chain.
+    # Spatial needs ≥2 venues; triangular needs only 1. The short-circuit
+    # fires only when the active strategy can't run with the seeded
+    # adapter count.
+    _candidate_strategy = _build_strategy(settings, list(adapters.keys()))
+    if mode == "live" and len(adapters) < _candidate_strategy.min_venues:
+        # Faz 7a's spatial-only single-venue mode — log live prices, no
+        # strategy/risk/execute chain. Faz 7d (Bybit) restores spatial;
+        # triangular reaches the full chain below.
         for _ in range(settings.pipeline_iterations):
             counters["iterations"] += 1
             for adapter in adapters.values():
@@ -159,19 +205,13 @@ async def run(
 
     # ----- full strategy chain (paper or multi-venue live) --------------
     exchange_ids = list(adapters.keys())
-    if len(exchange_ids) < 2:
-        raise ValueError("pipeline.run needs at least two seeded exchanges")
-    strategy = SpatialArbitrage(
-        symbol=_BTC,
-        exchange_a=exchange_ids[0],
-        exchange_b=exchange_ids[1],
-        size=volume(str(settings.spatial_size_btc)),
-        taker_fee_bps=settings.spatial_taker_fee_bps,
-        slippage_usd_per_leg=settings.spatial_slippage_usd_per_leg,
-        min_profit_threshold_usd=settings.spatial_min_profit_threshold_usd,
-        valid_for_ms=settings.spatial_valid_for_ms,
-        confidence=settings.spatial_confidence,
-    )
+    strategy = _candidate_strategy  # reuse the build from above
+    if len(exchange_ids) < strategy.min_venues:
+        raise ValueError(
+            f"pipeline.run needs at least {strategy.min_venues} seeded "
+            f"exchange(s) for strategy '{strategy.name}', got "
+            f"{len(exchange_ids)}"
+        )
 
     # Faz (D) — optional Prometheus exposition. Default off.
     metrics_runner = None
@@ -197,12 +237,22 @@ async def run(
                 await _poll_balances(adapters, tracker, Asset("USDT"))
 
             # 1. Snapshots → view + audit log + tracker (Faz 7f freshness)
+            # Multi-strategy: fetch every symbol the strategy declares.
+            # Triangular fetches 3 pairs from one venue; spatial fetches
+            # 1 pair from each venue.
             for adapter in adapters.values():
-                snap = await adapter.fetch_book_snapshot(_BTC)
-                view.update(snap)
-                log_file.append_snapshot(snap)
-                tracker.on_snapshot(snap)
-                counters["snapshots"] += 1
+                for sym in strategy.symbols:
+                    try:
+                        snap = await adapter.fetch_book_snapshot(sym)
+                    except KeyError:
+                        # Adapter has no book for this symbol (paper
+                        # seed didn't include it). For triangular, only
+                        # the configured venue carries all three pairs.
+                        continue
+                    view.update(snap)
+                    log_file.append_snapshot(snap)
+                    tracker.on_snapshot(snap)
+                    counters["snapshots"] += 1
 
             # 2. Strategy
             opp = strategy.evaluate(view, clk)
@@ -416,20 +466,12 @@ async def _run_ws(
     if tracker is None:
         tracker = AccountStateTracker()
     exchange_ids = list(adapters.keys())
-    has_strategy = len(exchange_ids) >= 2
     strategy = None
-    if has_strategy:
-        strategy = SpatialArbitrage(
-            symbol=_BTC,
-            exchange_a=exchange_ids[0],
-            exchange_b=exchange_ids[1],
-            size=volume(str(settings.spatial_size_btc)),
-            taker_fee_bps=settings.spatial_taker_fee_bps,
-            slippage_usd_per_leg=settings.spatial_slippage_usd_per_leg,
-            min_profit_threshold_usd=settings.spatial_min_profit_threshold_usd,
-            valid_for_ms=settings.spatial_valid_for_ms,
-            confidence=settings.spatial_confidence,
-        )
+    if exchange_ids:
+        candidate = _build_strategy(settings, exchange_ids)
+        if len(exchange_ids) >= candidate.min_venues:
+            strategy = candidate
+    has_strategy = strategy is not None
 
     bus = MarketDataBus()
     chain_lock = asyncio.Lock()  # serialize the strategy → risk → execute chain
@@ -509,7 +551,12 @@ async def _run_ws(
 
     # Launch each adapter's subscribe task; they push to the bus.
     async def adapter_task(adapter):
-        await adapter.subscribe([_BTC], bus.publish)
+        # Subscribe to whatever the active strategy needs (spatial=1
+        # symbol, triangular=3). WS adapters that don't support a given
+        # symbol surface that as their own error and won't block
+        # other subscriptions.
+        symbols = strategy.symbols if strategy is not None else [_BTC]
+        await adapter.subscribe(symbols, bus.publish)
 
     tasks = [asyncio.create_task(adapter_task(a)) for a in adapters.values()]
     _log.info(

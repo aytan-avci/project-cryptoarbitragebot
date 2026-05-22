@@ -61,6 +61,14 @@ class SpatialArbitrage:
 
     # ---- Strategy protocol ---------------------------------------------
 
+    @property
+    def symbols(self) -> list[Symbol]:
+        return [self._symbol]
+
+    @property
+    def min_venues(self) -> int:
+        return 2
+
     def evaluate(self, view: MarketView, clock: Clock) -> Opportunity | None:
         snap_a = view.snapshot(self._a, self._symbol)
         snap_b = view.snapshot(self._b, self._symbol)

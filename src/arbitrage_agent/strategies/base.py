@@ -53,3 +53,17 @@ class Strategy(Protocol):
         """Emit an `Opportunity` if profitable AFTER fees + slippage; else
         `None`. Must not mutate `view` or `clock`, must not perform I/O."""
         ...
+
+    @property
+    def symbols(self) -> list[Symbol]:
+        """The set of symbols whose snapshots `evaluate` consumes. The
+        pipeline uses this to know what to poll / subscribe to per
+        adapter without hardcoding `BTC/USDT` (Faz (B) — multi-strategy
+        switch)."""
+        ...
+
+    @property
+    def min_venues(self) -> int:
+        """Minimum number of adapters required for the strategy:
+        triangular is single-venue, spatial needs ≥2."""
+        ...

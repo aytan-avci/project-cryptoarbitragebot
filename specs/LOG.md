@@ -272,6 +272,69 @@ artefacts.
 - `SECURITY.md § 7 Change Log` — incident row + S1 strengthening row.
 - 224/224 pytest passing (218 + 6 lint tests).
 
+## [2026-05-23] setup | (B) Triangular strategy — single-venue 3-leg cycle (361 tests PASS)
+**Goal**: prove the strategy abstraction is modular by adding a second
+strategy (triangular) without touching spatial's code. CLAUDE.md C8
+("MVP supports one strategy") interpreted as one-strategy-per-
+deployment, swap via `STRATEGY_NAME` env.
+**New module (`strategies/triangular.py`)**: replaces the Faz-5 stub.
+`TriangularArbitrage` configured by 3 assets (quote, intermediate,
+base) and a single `exchange`. Two cyclic paths evaluated each tick:
+forward `Q→I→B→Q` (buy intermediate, swap to base, sell to quote),
+reverse `Q→B→I→Q`. Per-leg taker fee applied multiplicatively
+(`keep = 1 - fee_rate`). The strategy emits one `Opportunity` with
+3 legs at the better path's prices/quantities if `expected_net_
+profit ≥ min_profit_threshold_usd`, else None. PURE: no I/O, clock
+injected.
+**Strategy protocol (`strategies/base.py`)**: added `symbols:
+list[Symbol]` and `min_venues: int` properties. Pipeline reads
+these instead of hardcoding BTC/USDT or "≥2 venues".
+**Spatial (`strategies/spatial.py`)**: implements the new properties
+(`[self._symbol]`, `2`). No behavioural change.
+**Config (`config.py`)**: new `strategy_name: Literal["spatial",
+"triangular"]` (default "spatial") + 9 triangular params
+(`triangular_venue/quote/intermediate/base/size_quote/taker_fee_bps/
+min_profit_threshold_usd/valid_for_ms/confidence`).
+**Pipeline (`orchestration/pipeline.py`)**:
+- `_build_strategy(settings, exchange_ids)` selector — returns the
+  strategy matching `settings.strategy_name`. Triangular falls back
+  to the first available adapter if its configured venue is absent.
+- Snapshot fetch loop now iterates `strategy.symbols` per adapter,
+  catching `KeyError` for un-seeded paper symbols so spatial seeds
+  don't crash triangular mode.
+- Single-venue short-circuit (Faz 7a's "log prices only" mode)
+  gated on `len(adapters) < strategy.min_venues` so triangular
+  with one venue reaches the full chain.
+- Strategy built once (`_candidate_strategy`) and reused across the
+  short-circuit gate and the main loop — no duplicate instantiation.
+- WS mode `adapter.subscribe([_BTC], ...)` replaced with
+  `subscribe(strategy.symbols, ...)`; multi-symbol WS support
+  inherits from the existing per-adapter implementations.
+**Tests**:
+- `tests/unit/strategies/test_triangular.py` (new, 12 tests —
+  protocol conformance, declared symbols, missing-data None,
+  unprofitable parity None, forward path detection + leg ordering +
+  venue uniqueness, reverse path detection, profit scales linearly
+  with size, higher fees eliminate marginal opportunity, purity
+  (same inputs same legs+profit, only id varies), clock injection).
+- `tests/integration/test_pipeline.py` (+2 cases — `_build_strategy`
+  returns TriangularArbitrage with correct symbols when
+  `strategy_name=triangular`; triangular mode runs against one
+  seeded venue without raising the spatial 'needs 2 venues' error).
+- Existing `test_pipeline_rejects_single_seeded_exchange` regex
+  updated from "at least two seeded exchanges" → "at least 2
+  seeded exchange" (digit form, now strategy-parameterised).
+**End-to-end smoke**: paper Binance seeded with BTC/USDT (60000),
+ETH/USDT (3050), ETH/BTC (0.049 — undervalued vs parity) → pipeline
+detected forward-path triangular cycle, expected_net_profit_usd =
+$1.61, 3 legs (BTC/USDT buy → ETH/BTC buy → ETH/USDT sell), all on
+binance. Risk gate rejected at the ETH/BTC leg's min_order_value
+check — that's a known cross-pair currency-unit mismatch (gate
+expects USDT-denominated limit_price; ETH/BTC's price is in BTC),
+documented in MEMORY.md.
+**Test count**: 361 (was 347; +12 triangular unit + +2 pipeline
+integration; sentinel test text-update is net-zero).
+
 ## [2026-05-23] setup | (D) Performance + observability — Prometheus metrics (347 tests PASS)
 **Goal**: surface counters, gauges, and latency histograms via the
 standard Prometheus scrape endpoint so the bot is operable from
