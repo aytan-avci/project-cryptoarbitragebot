@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CssBaseline, ThemeProvider } from '@mui/material';
 
-import { KillSwitchBanner, Shell, TopBar } from './components/Layout';
+import { AuditLogPage } from './components/AuditLogPage';
+import { KillSwitchBanner, Shell, TopBar, type PageKey } from './components/Layout';
 import { HedgeActivity } from './components/HedgeActivity';
 import { Overview } from './components/Overview';
 import { SecurityStatus } from './components/SecurityStatus';
@@ -19,8 +20,18 @@ function readSavedMode(): Mode {
   }
 }
 
+function readSavedPage(): PageKey {
+  try {
+    const v = localStorage.getItem('aa.page');
+    return v === 'audit-log' ? 'audit-log' : 'overview';
+  } catch {
+    return 'overview';
+  }
+}
+
 export default function App() {
   const [mode, setMode] = useState<Mode>(readSavedMode);
+  const [page, setPage] = useState<PageKey>(readSavedPage);
   const theme = useMemo(() => (mode === 'dark' ? darkTheme : lightTheme), [mode]);
   const { events, loading, error } = useAuditLog(500);
   const killSwitch = useKillSwitch(2_000);
@@ -32,15 +43,28 @@ export default function App() {
     } catch {
       // localStorage unavailable — accept and move on
     }
+  }, [mode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('aa.page', page);
+    } catch {
+      // localStorage unavailable — accept and move on
+    }
+  }, [page]);
+
+  useEffect(() => {
     document.title = killSwitch.engaged
       ? '[KILL] Arbitrage Agent — Operator Dashboard'
       : 'Arbitrage Agent — Operator Dashboard';
-  }, [mode, killSwitch.engaged]);
+  }, [killSwitch.engaged]);
 
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Shell
+        currentPage={page}
+        onSelectPage={setPage}
         topBar={
           <TopBar
             mode={mode}
@@ -50,9 +74,15 @@ export default function App() {
         }
       >
         <KillSwitchBanner killSwitch={killSwitch} />
-        <Overview events={events} loading={loading} error={error} />
-        <HedgeActivity events={events} />
-        <SecurityStatus evidence={testnetEvidence} />
+        {page === 'overview' ? (
+          <>
+            <Overview events={events} loading={loading} error={error} />
+            <HedgeActivity events={events} />
+            <SecurityStatus evidence={testnetEvidence} />
+          </>
+        ) : (
+          <AuditLogPage events={events} loading={loading} error={error} />
+        )}
       </Shell>
     </ThemeProvider>
   );

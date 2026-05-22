@@ -19,15 +19,13 @@ import {
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import DashboardIcon from '@mui/icons-material/Dashboard';
-import TrendingUpIcon from '@mui/icons-material/TrendingUp';
-import ShieldIcon from '@mui/icons-material/Shield';
-import ReceiptIcon from '@mui/icons-material/Receipt';
 import ArticleIcon from '@mui/icons-material/Article';
-import SettingsIcon from '@mui/icons-material/Settings';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import BlockIcon from '@mui/icons-material/Block';
 
 import type { KillSwitchState } from '../types';
+
+export type PageKey = 'overview' | 'audit-log';
 
 const DRAWER_WIDTH = 240;
 
@@ -89,16 +87,17 @@ export function TopBar({ mode, onToggleTheme, killSwitch }: TopBarProps) {
   );
 }
 
-const NAV_ITEMS = [
-  { label: 'Overview', icon: DashboardIcon, active: true },
-  { label: 'Opportunities', icon: TrendingUpIcon, active: false },
-  { label: 'Risk Decisions', icon: ShieldIcon, active: false },
-  { label: 'Fills', icon: ReceiptIcon, active: false },
-  { label: 'Audit Log', icon: ArticleIcon, active: false },
-  { label: 'Settings', icon: SettingsIcon, active: false },
+const NAV_ITEMS: { label: string; icon: typeof DashboardIcon; page: PageKey }[] = [
+  { label: 'Overview', icon: DashboardIcon, page: 'overview' },
+  { label: 'Audit Log', icon: ArticleIcon, page: 'audit-log' },
 ];
 
-export function LeftRail() {
+interface LeftRailProps {
+  currentPage: PageKey;
+  onSelect: (page: PageKey) => void;
+}
+
+export function LeftRail({ currentPage, onSelect }: LeftRailProps) {
   const items = useMemo(() => NAV_ITEMS, []);
   return (
     <Drawer
@@ -116,9 +115,12 @@ export function LeftRail() {
     >
       <Toolbar variant="dense" />
       <List dense>
-        {items.map(({ label, icon: Icon, active }) => (
+        {items.map(({ label, icon: Icon, page }) => (
           <ListItem key={label} disablePadding>
-            <ListItemButton selected={active}>
+            <ListItemButton
+              selected={page === currentPage}
+              onClick={() => onSelect(page)}
+            >
               <ListItemIcon sx={{ minWidth: 36 }}>
                 <Icon fontSize="small" />
               </ListItemIcon>
@@ -170,14 +172,16 @@ export function KillSwitchBanner({ killSwitch }: KillSwitchBannerProps) {
 
 interface ShellProps {
   topBar: React.ReactNode;
+  currentPage: PageKey;
+  onSelectPage: (page: PageKey) => void;
   children: React.ReactNode;
 }
 
-export function Shell({ topBar, children }: ShellProps) {
+export function Shell({ topBar, currentPage, onSelectPage, children }: ShellProps) {
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
       {topBar}
-      <LeftRail />
+      <LeftRail currentPage={currentPage} onSelect={onSelectPage} />
       <Box
         component="main"
         sx={{
