@@ -719,6 +719,51 @@
   triangular from ever placing live trades until the gate is
   upgraded.
 
+### 2026-05-23 — (A) Mainnet runbook — 30-day testnet probation playbook
+- **What:** The operational sequence for taking the bot from
+  paper/dev to mainnet+live trading, satisfying SECURITY.md S7
+  ([[testnet-evidence-url-substring]]) + S4 (`LIVE_TRADING_CONFIRMED`)
+  in order:
+  1. **VPN up** — `testnet.binance.vision` blocked by the operator's
+     ISP (LibreSSL `WRONG_VERSION_NUMBER` on both curl and aiohttp;
+     diagnosed 2026-05-22). VPN must terminate outside the blocked
+     network before any auth call lands.
+  2. **Testnet env in `.env`** —
+     `EXECUTION_MODE=live`,
+     `BINANCE_ENABLED=true`,
+     `BINANCE_REST_BASE_URL=https://testnet.binance.vision`,
+     `BINANCE_API_KEY=...`, `BINANCE_API_SECRET=...` (testnet keys,
+     `canTrade=true, canWithdraw=false` — S5 probe enforces).
+     **Do not** set `LIVE_TRADING_CONFIRMED` yet; testnet URL skips
+     the S4 mainnet gate.
+  3. **Long-running process** — `python -m arbitrage_agent` under
+     `systemd` (preferred) or `nohup`. First successful
+     `_ensure_no_withdraw_permission()` stamps `first_seen_utc` into
+     `logs/testnet_evidence.json`; subsequent calls bump
+     `last_seen_utc`. Metrics on port 9090 if
+     `METRICS_ENABLED=true`.
+  4. **Daily integrity check** — cron:
+     `python scripts/verify_audit_chain.py logs/decisions.jsonl ||
+      page-operator`. Any non-zero exit = tampering, investigate
+     before resuming.
+  5. **Day-30 gate flip** — after 30 days of recorded activity,
+     `attest_mainnet_eligibility()` returns `(True, ...)`. Mainnet
+     PR becomes mergeable: flip `BINANCE_REST_BASE_URL` to
+     `https://api.binance.com`, set `LIVE_TRADING_CONFIRMED=true`,
+     record the date+rationale in MEMORY.md § Decisions, restart.
+- **Why:** S7's premise — testnet activity is the EVIDENCE that
+  unlocks mainnet. S4's confirmation is the OPERATOR ACK. Neither
+  alone is sufficient. The runbook chains them in the only safe
+  order: probation first, then conscious unlock. Skipping
+  steps 1–4 fails the gate ([[testnet-evidence-url-substring]]);
+  skipping step 5 fails the gate too.
+- **How to apply:** Don't deviate from the order. The
+  `S7_OVERRIDE_TESTNET_PROBATION=true` escape hatch exists for
+  emergencies (e.g. starting over after a wiped `logs/` dir during
+  legitimate maintenance), NOT for skipping probation. Every
+  override use must add a row to MEMORY.md § Decisions explaining
+  why the 30-day rule was bypassed.
+
 ### 2026-05-23 — Strategy protocol owns its own symbol set + venue count requirements
 - **What:** Faz (B) extended the Strategy Protocol with two
   read-only properties: `symbols: list[Symbol]` (what to fetch /

@@ -146,9 +146,32 @@ girdileri eklendi.
 - [x] **Faz 7g-b — Audit log hash chain (tampering catch)** (2026-05-22)
 - [x] **Faz 7g-c — Hedger real implementation (cancel + counter-leg + slippage budget)** (2026-05-22)
 - [x] **Faz 7g-d — S7 30-day testnet evidence enforcement gate** (2026-05-22)
+- [x] **(E) GitHub deployment — aytan-avci/project-cryptoarbitragebot private repo** (2026-05-22)
+- [x] **(C) Dashboard zenginleştirme — hedger events + S7 panel** (2026-05-23)
+- [x] **(D) Performance + observability — Prometheus metrics + /metrics endpoint** (2026-05-23)
+- [x] **(B) Triangular strategy — single-venue 3-leg cycle + strategy_name switch** (2026-05-23)
+- [ ] **(A) Mainnet'e geçiş — 30-day testnet probation runbook**
+  - Operatör adımları (kod gerekmez):
+    1. VPN açıp `.env`'e Binance TESTNET key+secret gir
+       (`BINANCE_REST_BASE_URL=https://testnet.binance.vision`,
+       `EXECUTION_MODE=live`, `BINANCE_ENABLED=true`)
+    2. `python -m arbitrage_agent` arka planda 30 gün çalıştır
+       (systemd unit veya `nohup`); ilk başarılı `_ensure_no_
+       withdraw_permission` çağrısı `logs/testnet_evidence.json`'a
+       `first_seen_utc` damgalar
+    3. Günlük `scripts/verify_audit_chain.py logs/decisions.jsonl`
+       cron ile koş; tamper alarmı yakala
+    4. 30 günden sonra `attest_mainnet_eligibility` `ok=True`
+       döner; `Settings()` mainnet+live'a izin verir
+    5. Mainnet PR'a `LIVE_TRADING_CONFIRMED=true` env'i + MEMORY.md
+       § Decisions'a tarih + rationale satırı ekle
+  - Bloker: VPN gerekiyor (ISP/geo block testnet.binance.vision'a)
 
 ## Blockers
-(yok)
+- (A) için: operatör'ün ISP'sinde testnet.binance.vision'a TLS
+  bağlantı reddediliyor (LibreSSL WRONG_VERSION_NUMBER, 2026-05-22
+  tespit). VPN aktifleşene kadar 30-day probation timer
+  başlamıyor.
 
 ## Session checklist (oturum sonu)
 - [ ] `Now` bu oturumda ne yapıldığını yansıtıyor mu?
