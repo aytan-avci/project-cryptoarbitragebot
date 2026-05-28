@@ -107,3 +107,21 @@ export interface TestnetEvidence {
   last_seen_utc: string | null;
   venues: string[];
 }
+
+// Faz 8 — redacted runtime status the bot writes to
+// logs/runtime_status.json. Contains booleans + non-secret values
+// ONLY; never SMTP password / Telegram token.
+export interface RuntimeStatus {
+  mode?: string;                  // paper | live
+  strategy?: string;              // spatial | triangular
+  loop_mode?: string;             // forever | once
+  email_configured?: boolean;
+  telegram_configured?: boolean;
+  iterations?: number;
+  opportunities?: number;
+  approved?: number;
+  rejected?: number;
+  fills?: number;
+  daily_pnl_usd?: string;
+  last_updated_utc?: string;
+}

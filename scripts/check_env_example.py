@@ -32,6 +32,7 @@ ALLOWED_VALUES = {
     "https://api.bybit.com",
     "https://api-testnet.bybit.com",
     "60", "120", "30",                        # rate / timeout defaults
+    "587",                                     # SMTP submission port (Faz 8)
 }
 
 # Lines we should skip entirely (comments, blank lines).

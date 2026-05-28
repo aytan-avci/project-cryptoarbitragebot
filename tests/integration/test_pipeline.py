@@ -232,6 +232,37 @@ def test_pipeline_hedge_fills_flow_through_audit_log_and_tracker(
     assert counters["fills"] == 1
 
 
+def test_pipeline_runtime_status_never_leaks_secrets(monkeypatch, tmp_path: Path):
+    """Faz 8 — runtime_status.json must contain booleans + non-secret
+    values ONLY. Even with SMTP password + Telegram token configured,
+    those strings must never appear in the status file (C6/S2)."""
+    monkeypatch.chdir(tmp_path)
+    _clean_env(monkeypatch)
+
+    secret_pw = "super-secret-smtp-pw-DO-NOT-LEAK"
+    secret_token = "123456:telegram-bot-token-DO-NOT-LEAK"
+    s = Settings(
+        pipeline_iterations=2,
+        alert_email_enabled=True,
+        smtp_host="smtp.test",
+        smtp_to="ops@test",
+        smtp_password=secret_pw,
+        telegram_enabled=True,
+        telegram_bot_token=secret_token,
+        telegram_chat_id="42",
+    )
+    asyncio.run(pipeline.run(s, snapshot_seeds=_wide_spread_seeds()))
+
+    status_text = (tmp_path / "logs" / "runtime_status.json").read_text()
+    assert secret_pw not in status_text
+    assert secret_token not in status_text
+    # but the redacted booleans ARE present
+    status = json.loads(status_text)
+    assert status["email_configured"] is True
+    assert status["telegram_configured"] is True
+    assert status["loop_mode"] == "once"
+
+
 def test_pipeline_forever_mode_stops_on_shutdown_event(
     monkeypatch, tmp_path: Path,
 ):

@@ -6,6 +6,7 @@ import type {
   LogEvent,
   OpportunityEvent,
   RiskDecisionEvent,
+  RuntimeStatus,
   SnapshotFetchedEvent,
   TestnetEvidence,
 } from './types';
@@ -100,6 +101,37 @@ export function useTestnetEvidence(intervalMs = 5_000): TestnetEvidence {
         if (!cancelled) setState(data);
       } catch {
         // Best-effort polling — keep previous state on transient errors.
+      }
+    };
+    tick();
+    const id = setInterval(tick, intervalMs);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [intervalMs]);
+
+  return state;
+}
+
+/** Poll `logs/runtime_status.json` — the bot's redacted runtime state
+ * (Faz 8). Missing file → empty object (bot not running yet). */
+export function useRuntimeStatus(intervalMs = 2_000): RuntimeStatus {
+  const [state, setState] = useState<RuntimeStatus>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch('/logs/runtime_status.json', { cache: 'no-store' });
+        if (!res.ok) {
+          if (!cancelled) setState({});
+          return;
+        }
+        const data = (await res.json()) as RuntimeStatus;
+        if (!cancelled) setState(data);
+      } catch {
+        // best-effort — keep previous state on transient errors
       }
     };
     tick();

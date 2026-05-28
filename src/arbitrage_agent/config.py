@@ -72,6 +72,27 @@ class Settings(BaseSettings):
     metrics_port: int = 9090
     metrics_host: str = "127.0.0.1"
 
+    # Faz 8 — notifications. SMTP is the primary channel; Telegram is
+    # wired but dormant (enable later). ALL secrets here come from .env
+    # and are NEVER written to runtime_status.json or logs (S2/C6).
+    alert_email_enabled: bool = False
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""          # secret — .env only
+    smtp_from: str = ""
+    smtp_to: str = ""                # comma-separated for multiple
+    smtp_use_tls: bool = True
+
+    telegram_enabled: bool = False
+    telegram_bot_token: str = ""     # secret — .env only
+    telegram_chat_id: str = ""
+
+    # Send a notification on every trade fill batch. Default off so a
+    # forever-mode run doesn't spam the inbox; kill-switch + hedge-abort
+    # alerts always fire regardless of this flag.
+    alert_on_fills: bool = False
+
     # Kill-switch durable state (sync JSON). `logs/` is gitignored.
     risk_kill_switch_path: Path = Path("logs/kill_switch.json")
 

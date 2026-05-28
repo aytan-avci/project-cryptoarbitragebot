@@ -38,6 +38,7 @@ EXPECTED_MODULES = {
     "arbitrage_agent.observability.alerts",
     "arbitrage_agent.observability.logging_setup",
     "arbitrage_agent.observability.metrics",
+    "arbitrage_agent.observability.runtime_status",
     "arbitrage_agent.orchestration",
     "arbitrage_agent.orchestration.account_state_tracker",
     "arbitrage_agent.orchestration.clock",

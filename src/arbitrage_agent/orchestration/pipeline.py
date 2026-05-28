@@ -35,6 +35,8 @@ from arbitrage_agent.exchanges.registry import build_live_adapters
 from arbitrage_agent.execution.engine import execute
 from arbitrage_agent.execution.hedger import hedge as run_hedge
 from arbitrage_agent.observability import metrics
+from arbitrage_agent.observability.alerts import Notifier, build_notifier
+from arbitrage_agent.observability.runtime_status import write_status
 from arbitrage_agent.ingestion.bus import LatestSnapshotView, MarketDataBus
 from arbitrage_agent.orchestration.account_state_tracker import AccountStateTracker
 from arbitrage_agent.orchestration.clock import SystemClock
@@ -121,6 +123,40 @@ async def _sleep_or_shutdown(
         await asyncio.wait_for(shutdown.wait(), timeout=seconds)
     except asyncio.TimeoutError:
         pass
+
+
+def _write_runtime_status(
+    settings: Settings,
+    *,
+    mode: str,
+    strategy_name: str,
+    counters: dict[str, int],
+    tracker: AccountStateTracker,
+) -> None:
+    """Faz 8 — emit the redacted status file for the dashboard. Contains
+    booleans + non-secret values ONLY; secrets never touch this path."""
+    try:
+        write_status(settings.runtime_status_path, {
+            "mode": mode,
+            "strategy": strategy_name,
+            "loop_mode": "forever" if settings.pipeline_iterations == 0 else "once",
+            "email_configured": bool(
+                settings.alert_email_enabled and settings.smtp_host and settings.smtp_to
+            ),
+            "telegram_configured": bool(
+                settings.telegram_enabled
+                and settings.telegram_bot_token
+                and settings.telegram_chat_id
+            ),
+            "iterations": counters["iterations"],
+            "opportunities": counters["opportunities"],
+            "approved": counters["approved"],
+            "rejected": counters["rejected"],
+            "fills": counters["fills"],
+            "daily_pnl_usd": str(tracker.daily_pnl_usd),
+        })
+    except OSError:
+        pass  # status file is best-effort observability, never block trading
 
 
 def _build_strategy(
@@ -263,6 +299,13 @@ async def run(
             host=settings.metrics_host, port=settings.metrics_port,
         )
 
+    # Faz 8 — notifications + redacted runtime status for the dashboard.
+    notifier = build_notifier(settings)
+    _write_runtime_status(
+        settings, mode=mode, strategy_name=strategy.name,
+        counters=counters, tracker=tracker,
+    )
+
     # Faz 8 — forever mode (pipeline_iterations=0) runs until a signal
     # sets the shutdown event. Finite mode (N>0) keeps the exact
     # previous semantics: exactly N iterations, no signal handler, no
@@ -382,10 +425,22 @@ async def run(
                         fee_usd=str(fill.fee),
                     )
             metrics.daily_pnl_usd.set(float(tracker.daily_pnl_usd))
+            # Faz 8 — optional per-iteration fill notification.
+            if settings.alert_on_fills and result.legs:
+                fill_lines = [
+                    f"{fl.side} {fl.volume} {fl.symbol} @ {fl.price} on {fl.exchange}"
+                    for lr in result.legs for fl in lr.fills
+                ]
+                if fill_lines:
+                    await notifier.send(
+                        f"Trade executed ({opp.strategy})",
+                        "\n".join(fill_lines)
+                        + f"\n\nDaily P&L: {tracker.daily_pnl_usd} USD",
+                    )
             if result.needs_hedge:
                 await _handle_hedge(
                     opp, result, adapters, view, settings,
-                    log_file, tracker, counters,
+                    log_file, tracker, counters, notifier,
                 )
 
             # 6. Daily-loss auto-kill (Faz 7g-a). Runs after every iteration's
@@ -393,6 +448,18 @@ async def run(
             engaged = _maybe_engage_daily_loss_kill(tracker, settings)
             if engaged:
                 metrics.kill_switch_engaged.set(1)
+                await notifier.send(
+                    "KILL-SWITCH ENGAGED",
+                    f"Daily loss breached the limit. Realised P&L: "
+                    f"{tracker.daily_pnl_usd} USD. All further opportunities "
+                    f"will be rejected until the kill-switch is manually reset.",
+                )
+
+        # Faz 8 — refresh the dashboard status file after each iteration.
+        _write_runtime_status(
+            settings, mode=mode, strategy_name=strategy.name,
+            counters=counters, tracker=tracker,
+        )
 
     await _close_adapters(adapters)
     if metrics_runner is not None:
@@ -451,6 +518,7 @@ async def _handle_hedge(
     log_file: DecisionLog,
     tracker: AccountStateTracker,
     counters: dict[str, int],
+    notifier: Notifier | None = None,
 ) -> None:
     """Faz 7g-c — call the real hedger, then thread its fills through
     the same audit + tracker pipeline as the original execution fills.
@@ -483,6 +551,19 @@ async def _handle_hedge(
         remaining_exposure=str(hedge_result.remaining_exposure),
         reason=hedge_result.reason,
     )
+    # Faz 8 — alert the operator when the hedger could NOT neutralise
+    # cleanly (open exposure left behind). `filled` / `no_imbalance`
+    # are healthy outcomes and stay silent.
+    if notifier is not None and hedge_result.status in (
+        "aborted_slippage", "placement_failed", "partial", "no_market_data",
+    ):
+        await notifier.send(
+            f"Hedge incomplete: {hedge_result.status}",
+            f"Opportunity {hedge_result.opportunity_id}\n"
+            f"Remaining exposure: {hedge_result.remaining_exposure}\n"
+            f"Reason: {hedge_result.reason}\n\n"
+            f"Operator review may be required.",
+        )
 
 
 def _maybe_engage_daily_loss_kill(
@@ -536,6 +617,7 @@ async def _run_ws(
         if len(exchange_ids) >= candidate.min_venues:
             strategy = candidate
     has_strategy = strategy is not None
+    notifier = build_notifier(settings)
 
     bus = MarketDataBus()
     chain_lock = asyncio.Lock()  # serialize the strategy → risk → execute chain
@@ -601,15 +683,36 @@ async def _run_ws(
                         fee_usd=str(fill.fee),
                     )
             metrics.daily_pnl_usd.set(float(tracker.daily_pnl_usd))
+            if settings.alert_on_fills and result.legs:
+                fill_lines = [
+                    f"{fl.side} {fl.volume} {fl.symbol} @ {fl.price} on {fl.exchange}"
+                    for lr in result.legs for fl in lr.fills
+                ]
+                if fill_lines:
+                    await notifier.send(
+                        f"Trade executed ({opp.strategy})",
+                        "\n".join(fill_lines)
+                        + f"\n\nDaily P&L: {tracker.daily_pnl_usd} USD",
+                    )
             if result.needs_hedge:
                 await _handle_hedge(
                     opp, result, adapters, view, settings,
-                    log_file, tracker, counters,
+                    log_file, tracker, counters, notifier,
                 )
 
             # Daily-loss auto-kill (Faz 7g-a)
             if _maybe_engage_daily_loss_kill(tracker, settings):
                 metrics.kill_switch_engaged.set(1)
+                await notifier.send(
+                    "KILL-SWITCH ENGAGED",
+                    f"Daily loss breached the limit. Realised P&L: "
+                    f"{tracker.daily_pnl_usd} USD. All further opportunities "
+                    f"will be rejected until the kill-switch is manually reset.",
+                )
+            _write_runtime_status(
+                settings, mode="live", strategy_name=strategy.name,
+                counters=counters, tracker=tracker,
+            )
 
     bus.subscribe(on_snapshot)
 
