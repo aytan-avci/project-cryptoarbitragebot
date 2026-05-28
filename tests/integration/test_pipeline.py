@@ -232,6 +232,54 @@ def test_pipeline_hedge_fills_flow_through_audit_log_and_tracker(
     assert counters["fills"] == 1
 
 
+def test_pipeline_forever_mode_stops_on_shutdown_event(
+    monkeypatch, tmp_path: Path,
+):
+    """Faz 8 — pipeline_iterations=0 runs until the shutdown event is
+    set. We inject the event by patching `_install_shutdown_event`, run
+    the pipeline as a task, let a few iterations happen, then signal
+    shutdown and assert the coroutine returns with iterations > 0."""
+    monkeypatch.chdir(tmp_path)
+    _clean_env(monkeypatch)
+
+    injected = asyncio.Event()
+    monkeypatch.setattr(pipeline, "_install_shutdown_event", lambda: injected)
+
+    async def drive():
+        # Small positive interval so the loop does a handful of
+        # iterations (not thousands) before we signal shutdown.
+        s = Settings(pipeline_iterations=0, poll_interval_s=0.01)
+        task = asyncio.create_task(
+            pipeline.run(s, snapshot_seeds=_wide_spread_seeds())
+        )
+        # Let the forever loop spin a bit, then request shutdown.
+        await asyncio.sleep(0.05)
+        injected.set()
+        return await asyncio.wait_for(task, timeout=5)
+
+    summary = asyncio.run(drive())
+    assert summary["iterations"] > 0  # ran at least once before shutdown
+
+
+def test_pipeline_forever_mode_returns_immediately_if_already_shutdown(
+    monkeypatch, tmp_path: Path,
+):
+    """If the shutdown event is already set before the loop starts, the
+    pipeline exits with zero iterations (clean no-op)."""
+    monkeypatch.chdir(tmp_path)
+    _clean_env(monkeypatch)
+
+    injected = asyncio.Event()
+    injected.set()
+    monkeypatch.setattr(pipeline, "_install_shutdown_event", lambda: injected)
+
+    s = Settings(pipeline_iterations=0)
+    summary = asyncio.run(
+        pipeline.run(s, snapshot_seeds=_wide_spread_seeds())
+    )
+    assert summary["iterations"] == 0
+
+
 def test_pipeline_triangular_strategy_runs_against_single_seeded_venue(
     monkeypatch, tmp_path: Path,
 ):

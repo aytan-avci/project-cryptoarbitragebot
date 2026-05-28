@@ -104,8 +104,21 @@ class Settings(BaseSettings):
     triangular_confidence: float = 0.85
 
     # Orchestration / pipeline (Faz 6).
+    # `pipeline_iterations=0` (Faz 8) means run FOREVER until SIGINT/
+    # SIGTERM — the autonomous-daemon mode. Any positive N runs exactly
+    # N iterations then exits (used by tests + one-shot smoke).
     pipeline_iterations: int = 1
     pipeline_decision_log_path: Path = Path("logs/decisions.jsonl")
+
+    # Faz 8 — seconds to sleep between poll-mode iterations. 0 = no
+    # sleep (fast finite test/smoke runs). Forever/live mode should set
+    # a positive value (e.g. 2.0) to respect venue rate limits.
+    poll_interval_s: float = 0.0
+
+    # Faz 8 — redacted runtime status the bot writes for the dashboard's
+    # read-only status panel. Contains booleans + non-secret values
+    # ONLY (never SMTP password / Telegram token).
+    runtime_status_path: Path = Path("logs/runtime_status.json")
 
     # Live exchanges (Faz 7a — read-only public REST; no API key required).
     # Default `False` keeps the synthetic-paper smoke path safe by default.

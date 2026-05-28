@@ -14,6 +14,7 @@ Owns the asyncio event loop. Three operating modes:
 """
 
 import asyncio
+import signal
 from decimal import Decimal
 
 import structlog
@@ -82,6 +83,44 @@ def _paper_from_seeds(
             taker_fee_bps=taker_fee_bps,
         )
     return out
+
+
+def _install_shutdown_event() -> asyncio.Event:
+    """Faz 8 — return an Event set on SIGINT/SIGTERM so the forever
+    loop can exit gracefully (close adapters, preserve kill-switch).
+    Signal registration is best-effort: platforms without
+    `add_signal_handler` (Windows) or non-main-thread loops fall back
+    to a never-set Event — the loop then runs until the process is
+    killed, which is acceptable for those environments."""
+    shutdown = asyncio.Event()
+    try:
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, shutdown.set)
+    except (NotImplementedError, RuntimeError, ValueError):
+        pass
+    return shutdown
+
+
+async def _sleep_or_shutdown(
+    seconds: float, shutdown: asyncio.Event | None
+) -> None:
+    """Sleep `seconds`, but wake immediately if shutdown is signalled.
+
+    When `seconds<=0` we still `await asyncio.sleep(0)` to YIELD to the
+    event loop — critical for forever mode: paper adapters perform no
+    real I/O, so without this yield the loop would never hand control
+    back and signal handlers (SIGINT/SIGTERM) would never run."""
+    if seconds <= 0:
+        await asyncio.sleep(0)
+        return
+    if shutdown is None:
+        await asyncio.sleep(seconds)
+        return
+    try:
+        await asyncio.wait_for(shutdown.wait(), timeout=seconds)
+    except asyncio.TimeoutError:
+        pass
 
 
 def _build_strategy(
@@ -224,7 +263,32 @@ async def run(
             host=settings.metrics_host, port=settings.metrics_port,
         )
 
-    for iter_idx in range(settings.pipeline_iterations):
+    # Faz 8 — forever mode (pipeline_iterations=0) runs until a signal
+    # sets the shutdown event. Finite mode (N>0) keeps the exact
+    # previous semantics: exactly N iterations, no signal handler, no
+    # inter-iteration sleep unless poll_interval_s>0.
+    forever = settings.pipeline_iterations == 0
+    shutdown = _install_shutdown_event() if forever else None
+    if forever:
+        _log.info("pipeline.forever_mode", poll_interval_s=settings.poll_interval_s)
+
+    iteration = 0
+    while forever or iteration < settings.pipeline_iterations:
+        if shutdown is not None and shutdown.is_set():
+            _log.info("pipeline.shutdown_requested", iterations=counters["iterations"])
+            break
+        # Inter-iteration throttle (skips before the first iteration and
+        # after the last finite one).
+        if iteration > 0:
+            await _sleep_or_shutdown(settings.poll_interval_s, shutdown)
+            if shutdown is not None and shutdown.is_set():
+                _log.info(
+                    "pipeline.shutdown_requested",
+                    iterations=counters["iterations"],
+                )
+                break
+        iter_idx = iteration
+        iteration += 1  # advance before the body so `continue` is safe
         counters["iterations"] += 1
 
         with metrics.pipeline_iteration_seconds.time():
@@ -559,18 +623,28 @@ async def _run_ws(
         await adapter.subscribe(symbols, bus.publish)
 
     tasks = [asyncio.create_task(adapter_task(a)) for a in adapters.values()]
+    # Faz 8 — ws_timeout_s<=0 means run forever (until SIGINT/SIGTERM).
+    forever = settings.ws_timeout_s <= 0
+    shutdown = _install_shutdown_event() if forever else None
     _log.info(
         "pipeline.ws_mode_started",
         venues=sorted(adapters.keys()),
         timeout_s=settings.ws_timeout_s,
+        forever=forever,
         strategy="spatial" if has_strategy else "none (single venue)",
     )
 
     try:
-        await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=settings.ws_timeout_s,
-        )
+        if forever:
+            # Run until a shutdown signal; the subscription tasks stream
+            # snapshots into `on_snapshot` for the lifetime of the process.
+            assert shutdown is not None
+            await shutdown.wait()
+        else:
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=settings.ws_timeout_s,
+            )
     except asyncio.TimeoutError:
         pass  # expected exit — timeout fires after WS_TIMEOUT_S
     finally:
