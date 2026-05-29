@@ -17,6 +17,9 @@
 | [`STATUS.md`](../STATUS.md) | Current session state. Bridge across `/compact` and new sessions. |
 | [`MEMORY.md`](../MEMORY.md) | Long-term project memory. Decisions, gotchas, operator preferences. |
 | [`USAGE.md`](../USAGE.md) | Bilingual (TR + EN) user manual — install, configure, run, dashboard, metrics, audit verify, testnet setup, mainnet runbook, troubleshooting, security notes. |
+| [`Dockerfile`](../Dockerfile) | Container image — python:3.11-slim, non-root, paper mode default, secrets via runtime env (Faz 8 part 3). |
+| [`docker-compose.yml`](../docker-compose.yml) | Autonomous daemon — `restart: always`, env_file `.env`, logs volume, metrics port 9090 (Faz 8 part 3). |
+| [`deploy/arbitrage-agent.service`](../deploy/arbitrage-agent.service) | systemd unit for non-Docker Linux deployment — Restart=always, EnvironmentFile, hardened (Faz 8 part 3). |
 
 ## specs/ (design & process)
 

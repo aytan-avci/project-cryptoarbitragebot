@@ -1,0 +1,40 @@
+# systemd unit for the Crypto Arbitrage Agent (Faz 8 part 3).
+#
+# Install (Linux host, no Docker):
+#   1. Edit the paths + User below to match your deployment.
+#   2. sudo cp deploy/arbitrage-agent.service /etc/systemd/system/
+#   3. sudo systemctl daemon-reload
+#   4. sudo systemctl enable --now arbitrage-agent
+#   5. journalctl -u arbitrage-agent -f      # follow logs
+#
+# Secrets live in the EnvironmentFile (.env, mode 0600, gitignored).
+# Restart=always brings the bot back after a crash; the bot's own
+# SIGTERM handler drains gracefully on `systemctl stop`.
+
+[Unit]
+Description=Crypto Arbitrage Agent (autonomous daemon)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/opt/arbitrage-agent
+EnvironmentFile=/opt/arbitrage-agent/.env
+# Forever mode + a sane poll interval for live venues.
+Environment=PIPELINE_ITERATIONS=0
+Environment=POLL_INTERVAL_S=2.0
+ExecStart=/opt/arbitrage-agent/.venv/bin/python -m arbitrage_agent
+Restart=always
+RestartSec=5
+# Graceful shutdown: the bot traps SIGTERM in forever mode.
+KillSignal=SIGTERM
+TimeoutStopSec=15
+# Light hardening — the bot only needs to read its dir + write logs/.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/arbitrage-agent/logs
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

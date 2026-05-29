@@ -6,7 +6,47 @@
 
 ---
 
-**(B) Triangular strategy tamam.** `strategies/triangular.py` stub'ı
+**Faz 8 tamam — bot artık gerçek anlamda otonom daemon.** Üç parça:
+(1) **Sürekli çalışma** — `PIPELINE_ITERATIONS=0` → SIGINT/SIGTERM
+gelene kadar forever. `_install_shutdown_event` (best-effort),
+`_sleep_or_shutdown` her durumda event loop'a yield eder (paper
+adapter'ların I/O'suz olduğu bug'ı fix). `POLL_INTERVAL_S` throttle.
+WS modu `ws_timeout_s<=0` → forever. (2) **Bildirim** — `alerts.py`
+stub tam modüle: `EmailNotifier` (stdlib smtplib, executor'da, yeni
+dep yok), `TelegramNotifier` (aiohttp, `telegram_enabled=false` ile
+uykuda), `CompositeNotifier`, `NullNotifier`. Pipeline alert noktaları:
+kill-switch engaged (critical), hedge incomplete, opsiyonel trade
+fills (`ALERT_ON_FILLS`). Hepsi best-effort, hata logla-yut. Yeni
+`runtime_status.py` `logs/runtime_status.json` yazar — **sadece
+boolean + non-secret değerler**; SMTP password / Telegram token asla.
+Dashboard yeni `RuntimeStatus` paneli (process canlılığı, mode,
+strategy, alert config chips). Vite middleware zaten `/logs/*`
+serve ediyor. (3) **Supervision** — `Dockerfile` (python:3.11-slim,
+non-root user, paper default), `docker-compose.yml` (`restart:always`,
+`stop_grace_period:15s`, metrics port 9090, logs volume), `deploy/
+arbitrage-agent.service` systemd unit (Restart=always, hardened
+ProtectSystem). **380/380 pytest yeşil** (önceki 361 + 2 forever-mode
++ 13 alerts + 3 runtime_status + 1 secret-redaction integration).
+Smoke: Docker image kuruldu, paper 3-iter exit 0, `docker stop`
+forever-mode → SIGTERM → `pipeline.shutdown_requested` log'u +
+graceful 1 saniyede exit. **Sızıntı testi**: LEAKTEST sentinel'lı
+secret'larla forever run → runtime_status.json + decisions.jsonl +
+structlog'da 0 occurrence.
+
+## Last session ended at
+**2026-05-29** — Faz 8 (otonomi katmanı): pipeline forever mode +
+SIGINT/SIGTERM graceful shutdown + `_sleep_or_shutdown` yield-on-zero
+fix; `alerts.py` Notifier protokolü + Email/Telegram/Composite/Null
++ `build_notifier(settings)`; `runtime_status.py` redacted JSON;
+pipeline wiring (notify on kill-switch + hedge-abort + opt fills,
+status write each iter, both REST + WS modes); Dockerfile + compose +
+systemd unit; dashboard `RuntimeStatus.tsx` + `useRuntimeStatus`
+hook; .env.example + check_env_example.py allowlist port 587;
+USAGE.md § 11a "Otonom (Daemon) Modu"; INDEX.md güncellendi.
+Commit'ler: 5901555 (part 1 forever), 862e1bc (part 2 notify+status),
+upcoming (part 3 supervision + wiki).
+
+ `strategies/triangular.py` stub'ı
 gerçek modüle dönüştü: `TriangularArbitrage` Strategy protokolüne
 uyuyor, `evaluate(view, clock)` pure function, üç pair (intermediate/
 quote, base/quote, base/intermediate) üzerinde forward (Q→I→B→Q)
@@ -150,6 +190,8 @@ girdileri eklendi.
 - [x] **(C) Dashboard zenginleştirme — hedger events + S7 panel** (2026-05-23)
 - [x] **(D) Performance + observability — Prometheus metrics + /metrics endpoint** (2026-05-23)
 - [x] **(B) Triangular strategy — single-venue 3-leg cycle + strategy_name switch** (2026-05-23)
+- [x] **Dashboard Audit Log sayfası + USAGE.md kılavuzu** (2026-05-23)
+- [x] **Faz 8 — Otonomi katmanı (forever + SMTP/Telegram + Docker/systemd)** (2026-05-29)
 - [ ] **(A) Mainnet'e geçiş — 30-day testnet probation runbook**
   - Operatör adımları (kod gerekmez):
     1. VPN açıp `.env`'e Binance TESTNET key+secret gir

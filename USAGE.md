@@ -281,6 +281,75 @@ atlamak için kullanma.**
 
 ---
 
+## 11a. Otonom (Daemon) Modu — Faz 8
+
+Bot "başlat-unut" daemon olarak çalışabilir. Üç parça:
+
+### Sürekli çalışma
+`PIPELINE_ITERATIONS=0` → SIGINT/SIGTERM gelene kadar sonsuz döngü.
+`POLL_INTERVAL_S=2.0` her iter arası uyuma (live için venue rate limit'e
+uyumlu). Graceful shutdown: bot SIGTERM'i yakalar, döngüyü temiz kapatır,
+kill-switch'i ASLA otomatik resetlemez.
+
+```bash
+PIPELINE_ITERATIONS=0 POLL_INTERVAL_S=2.0 .venv/bin/python -m arbitrage_agent
+```
+
+### Bildirim (SMTP + opsiyonel Telegram)
+E-posta birincil; Telegram altyapısı hazır-ama-uykuda. `.env`:
+
+```env
+ALERT_EMAIL_ENABLED=true
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=alerts@youraddr.com
+SMTP_PASSWORD=...                  # secret — .env only
+SMTP_FROM=alerts@youraddr.com
+SMTP_TO=ops@youraddr.com,me@me.com
+SMTP_USE_TLS=true
+
+# Telegram (sonra devreye almak için):
+TELEGRAM_ENABLED=false
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+
+ALERT_ON_FILLS=false                # her fill'de mail spam'ini önler
+```
+
+Tetiklenen olaylar (her zaman): kill-switch engaged, hedge incomplete
+(aborted_slippage/placement_failed/partial). Opsiyonel: trade fills
+(`ALERT_ON_FILLS=true`). Tüm secret'lar `.env`'de — dashboard'a
+**hiç dokunmaz**.
+
+### Süreç gözetimi
+İki seçenek:
+
+**Docker (önerilen):**
+```bash
+docker compose up -d --build      # arka plan + restart:always
+docker compose logs -f            # JSON log akışı
+docker compose down               # durdurma (graceful 15s)
+```
+
+**systemd (Linux host, non-Docker):**
+```bash
+sudo cp deploy/arbitrage-agent.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now arbitrage-agent
+journalctl -u arbitrage-agent -f
+```
+
+`restart: always` / `Restart=always` çökse de geri getirir. SIGTERM
+geldiğinde bot 15 saniyelik graceful grace'i içinde temiz kapanır.
+
+### Dashboard runtime status
+`logs/runtime_status.json` her iter'da güncellenir (boolean'lar +
+non-secret değerler). Dashboard'daki yeni **Runtime Status** paneli
+process canlılığını + bildirim config durumunu gösterir. Secret asla
+tarayıcıya gelmez.
+
+---
+
 ## 11. Operasyonel Kontroller
 
 ### Kill-Switch

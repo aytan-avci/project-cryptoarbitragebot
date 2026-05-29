@@ -1,0 +1,34 @@
+# Crypto Arbitrage Agent — autonomous daemon (Faz 8 part 3).
+#
+#   docker compose up -d --build      # start in the background
+#   docker compose logs -f            # follow structured JSON logs
+#   docker compose down               # stop
+#
+# Secrets + config come from .env (gitignored). `restart: always` brings
+# the bot back after a crash or host reboot — the autonomy contract.
+
+services:
+  arbitrage-agent:
+    build: .
+    image: arbitrage-agent:latest
+    container_name: arbitrage-agent
+    restart: always
+    env_file:
+      - .env
+    environment:
+      # Daemon mode: run forever, throttle the poll loop, expose metrics.
+      # Override anything here via .env.
+      PIPELINE_ITERATIONS: "0"
+      POLL_INTERVAL_S: "2.0"
+      METRICS_ENABLED: "true"
+      METRICS_HOST: "0.0.0.0"
+      METRICS_PORT: "9090"
+    ports:
+      - "9090:9090"   # Prometheus scrape endpoint
+    volumes:
+      # Persist the audit chain, kill-switch, testnet evidence, and
+      # runtime status across restarts.
+      - ./logs:/app/logs
+    # Stop signal is SIGTERM (default) — the bot installs a graceful
+    # handler in forever mode. Give it a few seconds to drain.
+    stop_grace_period: 15s

@@ -272,6 +272,98 @@ artefacts.
 - `SECURITY.md § 7 Change Log` — incident row + S1 strengthening row.
 - 224/224 pytest passing (218 + 6 lint tests).
 
+## [2026-05-29] setup | Faz 8 — autonomy layer (forever + notify + supervision, 380 tests PASS)
+**Goal**: turn the bot from a finite N-iteration batch into a true
+self-operating daemon. Three parts: continuous run, notifications,
+process supervision. Honors the joint security decision: secrets
+stay in `.env`, dashboard shows a redacted runtime status; no
+web-writable config endpoint.
+**Part 1 — continuous run (commit 5901555)**:
+- `pipeline_iterations=0` → forever poll loop; `ws_timeout_s<=0` →
+  forever WS. `_install_shutdown_event` registers SIGINT/SIGTERM
+  best-effort (no-op on platforms without `add_signal_handler`).
+- `_sleep_or_shutdown(seconds, shutdown)` waits up to `seconds` OR
+  until shutdown is signalled. CRITICAL fix: when `seconds<=0` it
+  still `await asyncio.sleep(0)` — without this, paper adapters
+  (no real I/O) never yield and the loop pegs a CPU + signal
+  handlers never run. Discovered via a hung test.
+- Finite mode (N>0) keeps exact prior semantics: no signal handler,
+  no inter-iteration sleep unless `poll_interval_s>0`.
+- WS forever mode awaits the shutdown event directly instead of
+  the original `asyncio.wait_for(..., timeout=ws_timeout_s)`.
+- New settings: `poll_interval_s: float = 0.0` (sleep between poll
+  iterations; 0 = no sleep, used by fast finite tests),
+  `runtime_status_path` (reserved for part 2).
+- Tests: +2 (shutdown event stops loop; already-set event = 0
+  iterations). Real-process smoke: SIGTERM → graceful exit 0
+  after 6 iterations.
+**Part 2 — notifications + redacted status (commit 862e1bc)**:
+- `observability/alerts.py` (was a 1-line stub): Notifier protocol,
+  `EmailNotifier` (stdlib `smtplib` run inside `loop.run_in_executor`,
+  no new dep), `TelegramNotifier` (aiohttp POST; built only when
+  `telegram_enabled` — dormant infrastructure ready for later),
+  `CompositeNotifier` (gather + any-true), `NullNotifier` no-op.
+  Every send is BEST-EFFORT: failure logged with redacted error,
+  swallowed, never propagated.
+- `build_notifier(settings)` assembles channels from `.env` config.
+- `observability/runtime_status.py` (new): `write_status(path, dict)`
+  stamps `last_updated_utc` and writes redacted JSON. Caller is
+  responsible for redaction — pipeline composes only booleans +
+  non-secret values.
+- Pipeline wiring: notify on kill-switch engaged (critical alert),
+  hedge incomplete (status in aborted_slippage / placement_failed /
+  partial / no_market_data), and optional fills (`alert_on_fills`,
+  default off to avoid forever-mode inbox spam). Both REST poll
+  and WS modes. Runtime status written at startup + after each
+  iteration (counters, daily_pnl_usd, mode, strategy, loop_mode,
+  email_configured, telegram_configured).
+- Dashboard: `RuntimeStatus.tsx` panel (process liveness chip via
+  `last_updated_utc` freshness < 15s, mode/strategy chips, email /
+  telegram configured chips, iterations counter) +
+  `useRuntimeStatus(2_000)` hook. Vite middleware already served
+  `/logs/*`. TS build clean.
+- New `.env.example` block for `ALERT_EMAIL_ENABLED`, `SMTP_*`,
+  `TELEGRAM_*`, `ALERT_ON_FILLS`. `check_env_example.py` allowlist
+  extended with port `587`.
+- Tests: +13 alerts unit (build_notifier matrix, EmailNotifier
+  mock smtplib, TelegramNotifier in-process stub server, composite
+  fan-out, swallowed exceptions), +3 runtime_status unit, +1
+  integration **secret-redaction**: drive pipeline with SMTP
+  password + Telegram token configured, assert neither string
+  appears in runtime_status.json. Real-process smoke with
+  `LEAKTEST_pw_999` + `LEAKTEST_token_888` sentinels: 0 occurrences
+  in runtime_status.json + decisions.jsonl + structlog output.
+**Part 3 — supervision**:
+- `Dockerfile`: python:3.11-slim, non-root `botuser` (uid 10001),
+  `logs/` volume, port 9090 exposed for metrics, `pip install .`
+  resolves pyproject deps. Secrets via runtime env, never baked in.
+- `.dockerignore`: keep context small, never ship .env / .git /
+  logs / tests / .venv / node_modules.
+- `docker-compose.yml`: `restart: always`, `stop_grace_period: 15s`
+  (matches the bot's own SIGTERM graceful handler), `env_file: .env`,
+  defaults `PIPELINE_ITERATIONS=0`, `POLL_INTERVAL_S=2.0`,
+  `METRICS_ENABLED=true`, `METRICS_HOST=0.0.0.0`.
+- `deploy/arbitrage-agent.service`: systemd unit for non-Docker
+  Linux. `Restart=always`, `RestartSec=5`, `KillSignal=SIGTERM`,
+  `TimeoutStopSec=15`. Hardened: `NoNewPrivileges`, `ProtectSystem=
+  strict`, `ReadWritePaths=/opt/arbitrage-agent/logs`, `PrivateTmp`.
+- Docker smoke: built image, ran paper 3-iter → exit 0 with
+  3 opportunities + 6 fills. Forever-mode smoke: `docker run -d`,
+  `docker stop` (sends SIGTERM) → bot logged
+  `pipeline.shutdown_requested` then `agent.complete`, graceful
+  exit in **1 second** (well under 15s grace period).
+**Config security (joint decision honored)**: ALL secrets in `.env`;
+dashboard shows only redacted runtime_status.json (booleans + non-
+secret values). No web-writable config endpoint. No secret-input
+form. C6 compliant, no dashboard auth required.
+**USAGE.md** gains § 11a "Otonom (Daemon) Modu" — sürekli çalışma,
+SMTP/Telegram env'leri, Docker + systemd komutları, runtime status
+panel açıklaması.
+**INDEX.md** updated with Dockerfile, docker-compose.yml,
+deploy/arbitrage-agent.service rows.
+**Test count**: 380 (was 361; +2 forever + 13 alerts + 3 runtime +
+1 redaction integration).
+
 ## [2026-05-23] setup | (B) Triangular strategy — single-venue 3-leg cycle (361 tests PASS)
 **Goal**: prove the strategy abstraction is modular by adding a second
 strategy (triangular) without touching spatial's code. CLAUDE.md C8
