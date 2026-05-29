@@ -691,6 +691,60 @@
   mainnet URL configured and asserts that NO file is written is the
   canonical regression test.
 
+### 2026-05-29 — Forever-mode loops MUST yield to the event loop even when poll_interval is 0
+- **What:** Faz 8's `_sleep_or_shutdown(seconds, shutdown)` in
+  `orchestration/pipeline.py` always executes at least
+  `await asyncio.sleep(0)` even when `seconds<=0`. Without this,
+  the forever poll loop pegs a CPU and signal handlers (SIGINT/
+  SIGTERM) never run.
+- **Why:** Paper adapters (`PaperExchange.fetch_book_snapshot`,
+  `place_order`, etc.) are `async def` but contain no real `await`
+  on I/O — they complete in a single synchronous step. asyncio
+  does NOT preempt; it cooperatively schedules. A loop whose only
+  awaits resolve immediately without yielding will own the loop
+  forever. Discovered when the first forever-mode integration test
+  hung indefinitely (exit code 144 background failure). The fix is
+  the canonical asyncio idiom for "yield to the loop."
+- **How to apply:** Any future tight async loop that may run
+  against paper/synthetic adapters MUST include a deliberate yield
+  point per iteration. `asyncio.sleep(0)` is the right primitive —
+  not `asyncio.sleep(0.001)` (still real-time delay) and not
+  nothing (CPU spin). The same principle applies if/when we add a
+  WS test stub that completes synchronously — give it a yield. As
+  a safety net, ANY forever loop that calls `_sleep_or_shutdown`
+  inherits this guarantee.
+
+### 2026-05-29 — Faz 8 secrets-stay-in-env contract; dashboard reads only redacted runtime_status.json
+- **What:** SMTP password + Telegram bot token live ONLY in `.env`
+  (and never appear in `runtime_status.json`, `decisions.jsonl`,
+  structlog output, or anywhere reachable by the dashboard). The
+  bot writes a redacted `logs/runtime_status.json` containing only
+  booleans (`email_configured`, `telegram_configured`) and
+  non-secret values (mode, strategy, iterations, daily_pnl_usd).
+  Dashboard's `RuntimeStatus` panel reads this like any other
+  `/logs/*` file. No web-writable config endpoint exists.
+- **Why:** Joint operator decision when planning Faz 8. The
+  dashboard is a Vite dev server with no authentication and plain
+  HTTP — adding a SMTP password form to it would create a write
+  endpoint with no auth on a financial bot. C6 ("secrets in .env
+  or vault") would be violated in spirit. The "bot writes redacted
+  status, UI reads it" pattern is what Grafana / n8n / most
+  self-hosted tools do: config in the UI for non-secret fields,
+  secrets from environment. We chose the safest form of this
+  pattern: even non-secret fields are not UI-editable yet, because
+  changing them would require a write endpoint that does not
+  exist. Status file is redacted by construction (the pipeline
+  composes the dict in `_write_runtime_status`).
+- **How to apply:** If a future task asks to "let the operator
+  edit settings from the UI": (1) NEVER include secrets in that
+  flow — keep them env-only; (2) the prerequisite for any UI
+  config editing is dashboard authentication + HTTPS, neither of
+  which exists yet; (3) the redacted-status pattern is the safe
+  default — extend it before adding write paths. The
+  `test_pipeline_runtime_status_never_leaks_secrets` regression
+  test uses `LEAKTEST_*` sentinel values; copy the same shape if
+  adding new secret-carrying settings.
+
 ### 2026-05-23 — Risk gate's min_order_value_usd assumes USDT-denominated limit_price; triangular intermediate leg breaks this assumption
 - **What:** Faz (B) triangular strategy emits 3 legs; one of them
   swaps base↔intermediate (e.g. ETH/BTC). The `limit_price` of that
