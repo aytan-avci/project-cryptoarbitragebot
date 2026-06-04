@@ -365,6 +365,10 @@ async def run(
             opp = strategy.evaluate(view, clk)
             if opp is None:
                 _log.info("pipeline.no_opportunity")
+                _write_runtime_status(
+                    settings, mode=mode, strategy_name=strategy.name,
+                    counters=counters, tracker=tracker,
+                )
                 continue
             counters["opportunities"] += 1
             metrics.opportunities_total.labels(strategy=opp.strategy).inc()
@@ -386,6 +390,10 @@ async def run(
                     "risk.rejected",
                     opportunity_id=decision.opportunity_id,
                     reason=decision.reason,
+                )
+                _write_runtime_status(
+                    settings, mode=mode, strategy_name=strategy.name,
+                    counters=counters, tracker=tracker,
                 )
                 continue
             counters["approved"] += 1
